@@ -9,6 +9,7 @@ import {
   type AgentEvent,
   type AgentProvider,
   type AgentResult,
+  type ColumnId,
   type Dispatch,
   type DispatchOverrides,
   type DispatchPreview,
@@ -52,11 +53,14 @@ export const slugify = (title: string) =>
 
 export const expandHome = (path: string, home: string) => (path === '~' ? home : path.startsWith('~/') ? join(home, path.slice(2)) : path)
 
+const AGENT_UPDATE_INTERVAL_MS = 20_000
 const FRESH_USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 export class AgentRunner implements AgentControl {
+  private updates = new Map<string, { at: number; text?: string; timer?: ReturnType<typeof setTimeout> }>()
+
   constructor(private deps: RunnerDeps) {}
 
   private get board() {
@@ -117,15 +121,16 @@ export class AgentRunner implements AgentControl {
     const provider = this.provider(s.defaultProvider)
     const instructions = overrides.instructions ?? buildInstructions(a, await this.deps.fetchContext(a).catch(() => undefined))
     const reuse = a.dispatch?.repository === repo.remote ? a.dispatch : undefined
-    const slug = `${a.displayId}-${slugify(a.title)}`
+    const slug = a.dispatch && !reuse ? `${a.displayId}-${slugify(repo.remote)}-${slugify(a.title)}` : `${a.displayId}-${slugify(a.title)}`
     const dispatch: Dispatch = {
       id: randomUUID(),
       provider: provider.id,
-      model: overrides.model ?? s.defaultModel,
+      model: overrides.model ?? s.defaultModel ?? provider.models[0]?.id,
       repository: repo.remote,
       repositoryPath: repo.path,
       worktreePath: reuse?.worktreePath ?? join(expandHome(s.workspaceLocation, this.deps.home ?? homedir()), slug),
       branch: reuse?.branch ?? `gantry/${slug}`,
+      sessionId: a.agentState === 'paused' ? reuse?.sessionId : undefined,
       permissionPreset,
       instructions,
       startedAt: this.iso(),
@@ -173,7 +178,7 @@ export class AgentRunner implements AgentControl {
     })
     const d = a.dispatch!
     try {
-      if (!this.deps.exists(d.worktreePath)) await this.createWorktree(a, d)
+      await this.prepareWorktree(a, d)
       const current = this.board.get(id)
       if (current?.dispatch?.id !== d.id || current.agentState !== 'running') return
       await this.provider(d.provider).start(
@@ -195,6 +200,18 @@ export class AgentRunner implements AgentControl {
     }
   }
 
+  private async isRegisteredWorktree(d: Dispatch) {
+    const list = await this.git(d.repositoryPath, ['worktree', 'list', '--porcelain'])
+    return list.code === 0 && list.output.split('\n').includes(`worktree ${d.worktreePath}`)
+  }
+
+  private async prepareWorktree(a: Actionable, d: Dispatch) {
+    if (await this.isRegisteredWorktree(d)) return
+    if (this.deps.exists(d.worktreePath))
+      throw new Error(`${d.worktreePath} already exists but is not a worktree of ${d.repository}. Move it away or change the workspace location.`)
+    await this.createWorktree(a, d)
+  }
+
   private async createWorktree(a: Actionable, d: Dispatch) {
     const repo = this.deps.repositories().find((r) => r.path === d.repositoryPath)
     const branchExists = (await this.git(d.repositoryPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.branch}`])).code === 0
@@ -206,7 +223,9 @@ export class AgentRunner implements AgentControl {
     if (!repo?.setupCommand) return
     const setup = await this.deps.exec(...shellCommand(repo.setupCommand), d.worktreePath)
     this.board.appendTranscript(a.id, d.id, { type: 'tool', name: 'setup', summary: setup.output })
-    if (setup.code !== 0) throw new Error(`Setup command exited with code ${setup.code}`)
+    if (setup.code === 0) return
+    await this.removeWorktree(d, true)
+    throw new Error(`Setup command exited with code ${setup.code}`)
   }
 
   handle(id: string, dispatchId: string, event: AgentEvent) {
@@ -215,6 +234,9 @@ export class AgentRunner implements AgentControl {
     this.board.appendTranscript(id, dispatchId, event)
     const live = hasLiveAgent(card)
     switch (event.type) {
+      case 'message':
+        if (live) this.agentUpdate(id, event.text)
+        break
       case 'session':
         this.board.update(id, (a) => (a.dispatch!.sessionId = event.sessionId))
         break
@@ -240,6 +262,8 @@ export class AgentRunner implements AgentControl {
         if (!live) break
         if (event.state === 'completed') this.complete(id, this.agentActor(card))
         else if (event.state === 'failed') this.fail(id, this.agentActor(card), 'Agent reported failure')
+        else if (event.state === 'paused' && card.agentState !== 'paused')
+          this.board.update(id, (a) => (a.agentState = 'paused'), { type: 'paused', actor: this.agentActor(card) })
         else if (event.state === 'running' || event.state === 'paused' || event.state === 'awaiting_input')
           this.board.update(id, (a) => (a.agentState = event.state))
         break
@@ -252,7 +276,26 @@ export class AgentRunner implements AgentControl {
     }
   }
 
+  private agentUpdate(id: string, text: string) {
+    const u = this.updates.get(id) ?? { at: 0 }
+    this.updates.set(id, u)
+    u.text = text
+    const wait = u.at + AGENT_UPDATE_INTERVAL_MS - Date.now()
+    if (wait <= 0) this.flushUpdate(id)
+    else u.timer ??= setTimeout(() => this.flushUpdate(id), wait)
+  }
+
+  private flushUpdate(id: string) {
+    const u = this.updates.get(id)
+    if (!u) return
+    clearTimeout(u.timer)
+    this.updates.set(id, { at: Date.now() })
+    const card = this.board.get(id)
+    if (u.text && card) this.board.log({ type: 'agent_update', detail: u.text, actor: this.agentActor(card) }, card)
+  }
+
   private complete(id: string, actor: Actor, result?: AgentResult) {
+    this.flushUpdate(id)
     this.board.update(
       id,
       (a) => {
@@ -268,6 +311,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private fail(id: string, actor: Actor, error: string) {
+    this.flushUpdate(id)
     this.board.update(
       id,
       (a) => {
@@ -369,7 +413,8 @@ export class AgentRunner implements AgentControl {
 
   async done(id: string, cleanup?: 'delete' | 'keep') {
     const a = this.board.must(id)
-    assertAction(a, 'done')
+    if (a.column === 'done') throw new Error(`${a.displayId} is already done`)
+    this.board.assertMove(a, 'done')
     const choice = cleanup ?? (this.deps.settings().workspaceCleanup === 'delete' ? 'delete' : 'keep')
     let detail = 'Workspace kept'
     if (choice === 'delete' && a.dispatch && this.deps.exists(a.dispatch.worktreePath)) {
@@ -379,8 +424,26 @@ export class AgentRunner implements AgentControl {
     this.board.markDone(id, detail)
   }
 
-  private removeWorktree(d: Pick<Dispatch, 'repositoryPath' | 'worktreePath'>) {
-    return this.git(d.repositoryPath, ['worktree', 'remove', d.worktreePath])
+  async move(id: string, column: ColumnId, position: number) {
+    const a = this.board.must(id)
+    if (column === 'done' && a.column !== 'done') await this.done(id)
+    else {
+      this.board.assertMove(a, column)
+      if (a.column === 'in_progress' && column !== 'in_progress') await this.release(a)
+    }
+    this.board.move(id, column, position)
+  }
+
+  private async release(a: Actionable) {
+    if (a.agentState !== 'paused' || !a.dispatch) return
+    await this.deps.providers
+      .get(a.dispatch.provider)
+      ?.stop(a.id)
+      .catch((err) => console.error('provider stop failed', err))
+  }
+
+  private removeWorktree(d: Pick<Dispatch, 'repositoryPath' | 'worktreePath'>, force = false) {
+    return this.git(d.repositoryPath, ['worktree', 'remove', ...(force ? ['--force'] : []), d.worktreePath])
   }
 
   async openInTerminal(id: string) {
@@ -401,6 +464,6 @@ export class AgentRunner implements AgentControl {
   }
 
   async removeAllWorktrees() {
-    for (const w of this.board.recordedWorktrees()) if (this.deps.exists(w.worktreePath)) await this.removeWorktree(w)
+    for (const w of this.board.recordedWorktrees()) if (this.deps.exists(w.worktreePath)) await this.removeWorktree(w, true)
   }
 }

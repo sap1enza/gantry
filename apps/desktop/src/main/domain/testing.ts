@@ -68,7 +68,8 @@ export function setup() {
     now: () => new Date(now),
   })
   const provider = new FakeProvider()
-  const worktrees = new Set<string>()
+  const worktrees = new Map<string, string>()
+  const strays = new Set<string>()
   const execCalls: string[][] = []
   const execResults: Record<string, { code: number; output: string }> = {}
   const exec: Exec = async (file, args, cwd) => {
@@ -77,15 +78,17 @@ export function setup() {
     const key = Object.keys(execResults).find((k) => call.join(' ').includes(k))
     if (key) return execResults[key]!
     if (args.includes('rev-parse')) return { code: 1, output: '' }
-    if (args[2] === 'worktree' && args[3] === 'add') worktrees.add(args[4]!)
-    if (args[2] === 'worktree' && args[3] === 'remove') worktrees.delete(args[4]!)
+    if (args[2] === 'worktree' && args[3] === 'add') worktrees.set(args[4]!, args[1]!)
+    if (args[2] === 'worktree' && args[3] === 'remove') worktrees.delete(args.at(-1)!)
+    if (args[2] === 'worktree' && args[3] === 'list')
+      return { code: 0, output: [...worktrees].filter(([, repo]) => repo === args[1]).map(([path]) => `worktree ${path}\nHEAD abc\n`).join('\n') }
     return { code: 0, output: '' }
   }
   const runner = new AgentRunner({
     board,
     providers: new Map([[provider.id, provider]]),
     exec,
-    exists: (path) => worktrees.has(path),
+    exists: (path) => worktrees.has(path) || strays.has(path),
     settings: () => settings.get(),
     repositories: () => repos.list(),
     fetchContext: async () => 'PR diff summary',
@@ -105,6 +108,7 @@ export function setup() {
     repo,
     pushes,
     worktrees,
+    strays,
     execCalls,
     execResults,
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),

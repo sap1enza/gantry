@@ -1,5 +1,5 @@
 import { COMPLETION_INSTRUCTIONS, TAGS } from '@gantry/shared'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { flush, setup, signal } from '../domain/testing'
 import { expandHome, slugify } from './runner'
 
@@ -67,6 +67,60 @@ describe('worktrees', () => {
     expect(s.provider.requests[1]!.worktreePath).toBe(s.provider.requests[0]!.worktreePath)
     expect(s.provider.requests[1]!.dispatchId).not.toBe(s.provider.requests[0]!.dispatchId)
     expect(s.board.must(id).tags).not.toContain(TAGS.stopped)
+  })
+
+  it('removes a worktree whose setup failed so a retry reruns setup', async () => {
+    const s = setup()
+    s.repos.setSetupCommand(s.repo.id, 'false')
+    s.execResults['-lc false'] = { code: 2, output: 'boom' }
+    const id = await started(s)
+    const path = s.board.must(id).dispatch!.worktreePath
+    expect(s.execCalls.at(-1)).toEqual(['git', '-C', '/code/api', 'worktree', 'remove', '--force', path])
+    delete s.execResults['-lc false']
+    s.board.move(id, 'todo', 0)
+    await s.runner.start(id)
+    await flush()
+    expect(s.execCalls.filter((c) => c.includes('-lc'))).toHaveLength(2)
+    expect(s.provider.requests).toHaveLength(1)
+  })
+
+  it('creates a separate worktree after the repository changes', async () => {
+    const s = setup()
+    s.repos.add({ path: '/code/web', remote: 'acme/web', defaultBranch: 'main' })
+    const id = await started(s)
+    const first = s.provider.requests[0]!.worktreePath
+    await s.runner.stop(id)
+    await s.runner.start(id, { repository: 'acme/web' })
+    await flush()
+    const second = s.provider.requests[1]!.worktreePath
+    expect(second).not.toBe(first)
+    expect(s.execCalls).toContainEqual(['git', '-C', '/code/web', 'worktree', 'add', second, '-b', 'gantry/GT-001-acme-web-fix-ci-1', 'main'])
+  })
+
+  it('refuses to adopt a directory Gantry did not create', async () => {
+    const s = setup()
+    s.strays.add('/Users/me/Developer/Gantry/GT-001-fix-ci-1')
+    const id = await started(s)
+    expect(s.provider.requests).toHaveLength(0)
+    expect(s.board.must(id).error).toMatch(/already exists but is not a worktree of acme\/api/)
+    expect(s.execCalls.some((c) => c.includes('add'))).toBe(false)
+  })
+
+  it('dispatches with the first provider model when no default is set', async () => {
+    const s = setup()
+    await started(s)
+    expect(s.provider.requests[0]!.model).toBe('sonnet')
+  })
+
+  it('moving a Review card to Done cleans up like the Done button', async () => {
+    const s = setup()
+    const id = await started(s)
+    s.provider.emit(id, { type: 'state', state: 'completed' })
+    const path = s.board.must(id).dispatch!.worktreePath
+    await s.runner.move(id, 'done', 0)
+    expect(s.execCalls.at(-1)).toEqual(['git', '-C', '/code/api', 'worktree', 'remove', path])
+    expect(s.board.must(id).column).toBe('done')
+    expect(s.eventTypes(id).at(-1)).toBe('done')
   })
 
   it('cleanup on Done removes only the recorded worktree path', async () => {
@@ -241,6 +295,48 @@ describe('lifecycle', () => {
     await s.board.dismissCard(id, { kind: 'user', name: 'You' })
     expect(s.provider.calls).toEqual([`stop:${id}`])
     expect(s.eventTypes(id).slice(-2)).toEqual(['stopped', 'dismissed'])
+  })
+
+  it('moving a paused card out of In Progress releases the run and a later Start resumes the session', async () => {
+    const s = setup()
+    const id = await started(s)
+    s.provider.emit(id, { type: 'session', sessionId: 's-1' })
+    await s.runner.pause(id)
+    const blocked = s.board.createColumn('Blocked', 4)
+    await s.runner.move(id, blocked.id, 0)
+    expect(s.provider.calls.at(-1)).toBe(`stop:${id}`)
+    expect(s.board.must(id).dispatch!.sessionId).toBe('s-1')
+    await s.runner.start(id)
+    await flush()
+    expect(s.provider.requests[1]!.resumeSessionId).toBe('s-1')
+  })
+
+  it('logs paused when the provider reports it', async () => {
+    const s = setup()
+    const id = await started(s)
+    s.provider.emit(id, { type: 'state', state: 'paused' })
+    s.provider.emit(id, { type: 'state', state: 'paused' })
+    expect(s.eventTypes(id).filter((t) => t === 'paused')).toHaveLength(1)
+  })
+
+  it('throttles agent updates to one per 20 s per card, keeping the latest', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const s = setup()
+      const id = await started(s)
+      const updates = () => s.board.events({ types: ['agent_update'] }).events.map((e) => e.detail).reverse()
+      s.provider.emit(id, { type: 'message', text: 'one' })
+      s.provider.emit(id, { type: 'message', text: 'two' })
+      s.provider.emit(id, { type: 'message', text: 'three' })
+      expect(updates()).toEqual(['one'])
+      vi.advanceTimersByTime(20_000)
+      expect(updates()).toEqual(['one', 'three'])
+      s.provider.emit(id, { type: 'message', text: 'four' })
+      s.provider.emit(id, { type: 'state', state: 'completed' })
+      expect(updates()).toEqual(['one', 'three', 'four'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('recovers orphaned agents as Stopped on launch', async () => {

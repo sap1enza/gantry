@@ -148,6 +148,25 @@ describe('api actionables', () => {
     board.dismiss('wrk-1')
     await vi.waitFor(() => expect(board.must('wrk-1').dismissedAt).toBeDefined())
   })
+
+  it('matches a bare external id against the stored source:external_id key', () => {
+    const { board } = setup()
+    board.ingest(apiSignal())
+    board.applyPatch('hb-1', { title: 'By external id' })
+    expect(board.must('wrk-1').title).toBe('By external id')
+  })
+
+  it('ignores patches and dismissals aimed at non-API cards', async () => {
+    const { board } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.applyPatch('GT-001', { title: 'Hijacked' })
+    board.dismiss(id!)
+    await flush()
+    expect(board.must(id!).title).toBe('Fix CI')
+    expect(board.must(id!).dismissedAt).toBeUndefined()
+    const outcomes = board.events({ types: ['received'] }).events.map((e) => e.outcome)
+    expect(outcomes.slice(0, 2)).toEqual(['ignored:filtered', 'ignored:filtered'])
+  })
 })
 
 describe('source disconnect', () => {
@@ -197,6 +216,14 @@ describe('guarded user transitions', () => {
     board.move(id!, 'done', 0)
     board.reopenToTodo(id!)
     expect(board.must(id!).column).toBe('todo')
+  })
+
+  it('logs reopened when a card leaves Done', () => {
+    const { board, eventTypes } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.move(id!, 'done', 0)
+    board.move(id!, 'todo', 0)
+    expect(eventTypes(id).slice(-2)).toEqual(['moved', 'reopened'])
   })
 
   it('refuses to snooze from Review or into the past', async () => {
