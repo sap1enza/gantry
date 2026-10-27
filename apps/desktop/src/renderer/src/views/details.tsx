@@ -39,25 +39,24 @@ const describeAgentEvent = (e: AgentEvent): string | undefined => {
 
 export function DetailsPanel({ id }: { id: string }) {
   const app = useApp()
-  const fromSnapshot = app.snapshot?.actionables.find((a) => a.id === id)
   const [fetched, setFetched] = useState<Actionable>()
-  const card = fromSnapshot ?? (fetched?.id === id ? fetched : undefined)
+  const card = fetched?.id === id ? fetched : undefined
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [live, setLive] = useState<{ at: string; text: string }[]>([])
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState('')
   const [transcript, setTranscript] = useState<TranscriptEntry[]>()
 
-  const inSnapshot = !!fromSnapshot
-  const fetchCard = useCallback(() => void (!inSnapshot && api.board.get(id).then(setFetched)), [id, inSnapshot])
+  const version = app.snapshot?.actionables.find((a) => a.id === id)?.updatedAt
+  const fetchCard = useCallback(() => void api.board.get(id).then((c) => c && setFetched((prev) => (prev?.id === c.id && prev.updatedAt > c.updatedAt ? prev : c))), [id])
   useEffect(() => {
     setLive([])
     setAnswer('')
     setFeedback('')
     void api.activity.list({ actionableId: id, limit: 6 }).then((log) => setEvents(log.events))
   }, [id])
-  useEffect(fetchCard, [fetchCard])
-  usePush('board.changed', fetchCard)
+  useEffect(fetchCard, [fetchCard, version])
+  usePush('board.changed', () => !version && fetchCard())
   usePush('activity.appended', ({ event }) => event.actionableId === id && setEvents((list) => [event, ...list].slice(0, 6)))
   usePush('agent.event', ({ actionableId, event }) => {
     const text = actionableId === id && describeAgentEvent(event)

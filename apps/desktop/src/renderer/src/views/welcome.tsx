@@ -1,18 +1,17 @@
-import { TRIGGERS, type OAuthProvider } from '@gantry/shared'
+import { PROVIDER_SOURCE, TRIGGERS, type OAuthProvider } from '@gantry/shared'
 import { ArrowUpRight, Check, CircleCheck, CircleDashed, CircleDot, CircleHelp, Inbox, Lock, Pause, Plus, ShieldCheck, SlidersHorizontal, SquareTerminal, Webhook, X } from 'lucide-react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { Github, INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
+import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
 import { useBrowserAuth } from './connections'
 
 const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
-const OAUTH_INPUTS = INPUTS.filter((i) => i.provider !== 'api') as Extract<(typeof INPUTS)[number], { provider: OAuthProvider }>[]
 
 function useSetupProgress() {
   const app = useApp()
   const connected = app.connections.filter((c) => c.provider !== 'api' && c.status === 'connected')
   const triggersChosen = connected.some((c) =>
-    Object.entries(TRIGGERS).some(([id, t]) => t.source === INPUTS.find((i) => i.provider === c.provider)?.kind && app.settings?.triggers[id as keyof typeof TRIGGERS]),
+    Object.entries(TRIGGERS).some(([id, t]) => c.provider !== 'api' && t.source === PROVIDER_SOURCE[c.provider] && app.settings?.triggers[id as keyof typeof TRIGGERS]),
   )
   const canDispatch = !!app.checks?.claude.available && (app.checks?.repositories ?? 0) > 0
   const dispatched = !!app.snapshot?.actionables.some((a) => a.dispatch)

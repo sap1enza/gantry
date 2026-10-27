@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { SNOOZE_PRESETS, snoozeUntil } from '../lib/snooze'
-import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, SourceIcon, Tag } from '../ui'
+import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
 import { useBrowserAuth } from './connections'
 import { stateLabel } from './details'
 
@@ -112,24 +112,11 @@ export function NewActionableModal() {
         </label>
         <label className="form-label grow">
           Repository
-          <select className="select" value={repository} onChange={(e) => setRepository(e.target.value)}>
-            <option value="">None</option>
-            {repos.map((r) => (
-              <option key={r.id} value={r.remote}>
-                {r.remote}
-              </option>
-            ))}
-          </select>
+          <Select label="Repository" value={repository} options={[{ value: '', label: 'None' }, ...repos.map((r) => ({ value: r.remote, label: r.remote }))]} onChange={setRepository} />
         </label>
         <label className="form-label">
           Priority
-          <select className="select" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-            {PRIORITIES.map((p) => (
-              <option key={p} value={p}>
-                {p[0]!.toUpperCase() + p.slice(1)}
-              </option>
-            ))}
-          </select>
+          <Select label="Priority" value={priority} options={PRIORITIES.map((p) => ({ value: p, label: p[0]!.toUpperCase() + p.slice(1) }))} onChange={setPriority} />
         </label>
       </div>
       <div className="form-label">
@@ -218,25 +205,17 @@ export function DispatchSheet() {
       <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
         <label className="form-label grow">
           Repository
-          <select className="select" value={repository} onChange={(e) => setRepository(e.target.value)}>
-            {!preview.repository && <option value="">Choose a repository…</option>}
-            {preview.repositoryCandidates.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
+          <Select
+            label="Repository"
+            value={repository}
+            options={[...(preview.repository ? [] : [{ value: '', label: 'Choose a repository…' }]), ...preview.repositoryCandidates.map((r) => ({ value: r, label: r }))]}
+            onChange={setRepository}
+          />
           {!preview.repositoryCandidates.length && <span className="small" style={{ color: 'var(--red)', fontWeight: 400 }}>Register a repository in Preferences first.</span>}
         </label>
         <label className="form-label grow">
           Agent
-          <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-            {preview.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {PROVIDER_LABEL[preview.provider] ?? preview.provider} · {m.label}
-              </option>
-            ))}
-          </select>
+          <Select label="Agent" value={model} options={preview.models.map((m) => ({ value: m.id, label: `${PROVIDER_LABEL[preview.provider] ?? preview.provider} · ${m.label}` }))} onChange={setModel} />
         </label>
       </div>
       <fieldset className="form-label" style={{ border: 0, padding: 0, margin: 0 }}>

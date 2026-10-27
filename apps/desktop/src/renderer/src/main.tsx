@@ -4,7 +4,11 @@ import { Shell } from './shell'
 import './styles.css'
 
 createRoot(document.getElementById('root')!).render(
-  <AppProvider>
-    <Shell />
-  </AppProvider>,
+  window.gantryTransport ? (
+    <AppProvider>
+      <Shell />
+    </AppProvider>
+  ) : (
+    <div className="empty-state muted">Open Gantry in the desktop app.</div>
+  ),
 )
