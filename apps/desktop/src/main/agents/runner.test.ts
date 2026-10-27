@@ -107,6 +107,44 @@ describe('concurrency', () => {
     expect(s.provider.requests.map((r) => r.actionableId)).toEqual([a, b])
   })
 
+  it('queues a resume when no slot is free and resumes the session when one frees', async () => {
+    const s = setup()
+    s.settings.update({ maxConcurrentAgents: 1 })
+    const a = await started(s, 1)
+    s.provider.emit(a, { type: 'session', sessionId: 's-1' })
+    await s.runner.pause(a)
+    const b = await started(s, 2)
+    await s.runner.resume(a, 'go on')
+    expect(s.board.must(a)).toMatchObject({ agentState: 'queued', tags: expect.arrayContaining([TAGS.queued]) })
+    expect(s.provider.calls).toEqual([`pause:${a}`])
+    s.provider.emit(b, { type: 'state', state: 'completed' })
+    await flush()
+    expect(s.board.must(a).agentState).toBe('running')
+    expect(s.provider.requests.at(-1)).toMatchObject({ actionableId: a, resumeSessionId: 's-1', instructions: 'go on' })
+  })
+
+  it('queues a reopen when no slot is free', async () => {
+    const s = setup()
+    s.settings.update({ maxConcurrentAgents: 1 })
+    const a = await started(s, 1)
+    s.provider.emit(a, { type: 'state', state: 'completed' })
+    const b = await started(s, 2)
+    await s.runner.reopen(a, 'more')
+    await flush()
+    expect(s.board.must(a).agentState).toBe('queued')
+    s.provider.emit(b, { type: 'state', state: 'completed' })
+    await flush()
+    expect(s.board.must(a).agentState).toBe('running')
+  })
+
+  it('starting with a chosen repository clears Needs repository', async () => {
+    const s = setup()
+    const id = s.board.ingest(signal({ trigger: 'api.custom', source: { kind: 'api', name: 'HB' }, externalKey: 'HB:1', links: [], repository: 'acme/nope' })).actionableId!
+    expect(s.board.must(id).tags).toContain(TAGS.needsRepository)
+    await s.runner.start(id, { repository: 'acme/api' })
+    expect(s.board.must(id).tags).not.toContain(TAGS.needsRepository)
+  })
+
   it('stopping a queued card does not call the provider', async () => {
     const s = setup()
     s.settings.update({ maxConcurrentAgents: 1 })
