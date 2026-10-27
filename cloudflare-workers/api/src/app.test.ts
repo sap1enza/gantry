@@ -168,10 +168,32 @@ describe('hardening', () => {
   it('returns 429 with Retry-After once the per-minute limit is spent', async () => {
     const { auth, deviceId } = await registerDevice()
     await env.DB.prepare('INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 59)').bind(`device:${deviceId}`, Math.floor(Date.now() / 60_000)).run()
-    expect((await call('/v1/inbox', { auth })).status).toBe(200)
-    const limited = await call('/v1/inbox', { auth })
+    expect((await call('/v1/me', { auth })).status).toBe(200)
+    const limited = await call('/v1/me', { auth })
     expect(limited.status).toBe(429)
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+  })
+
+  it('does not rate limit inbox polling and acks', async () => {
+    const { auth, deviceId } = await registerDevice()
+    await env.DB.prepare('INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 1000)').bind(`device:${deviceId}`, Math.floor(Date.now() / 60_000)).run()
+    expect((await call('/v1/inbox', { auth })).status).toBe(200)
+    expect((await call('/v1/inbox/ack', { method: 'POST', auth, body: JSON.stringify({ ids: [] }) })).status).toBe(204)
+  })
+
+  it('records token use at most once an hour', async () => {
+    const { auth } = await registerDevice()
+    const { id, token } = await createToken(auth)
+    const use = () => call('/v1/actionables/x/dismiss', { method: 'POST', auth: `Bearer ${token}` })
+    const lastUsed = () => env.DB.prepare('SELECT last_used_at FROM api_tokens WHERE id = ?').bind(id).first<string>('last_used_at')
+    await use()
+    const first = await lastUsed()
+    expect(first).not.toBeNull()
+    await use()
+    expect(await lastUsed()).toBe(first)
+    await env.DB.prepare("UPDATE api_tokens SET last_used_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").bind(id).run()
+    await use()
+    expect(await lastUsed()).not.toBe('2000-01-01T00:00:00.000Z')
   })
 
   it('limits device registrations to 10 per hour per IP', async () => {
@@ -437,18 +459,39 @@ describe('github webhook', () => {
     const { auth } = await registerDevice()
     mockGithubOAuth()
     await connect(auth, 'github')
-    const body = JSON.stringify({ action: 'completed', installation: { id: 42 } })
+    const body = JSON.stringify({ action: 'completed', installation: { id: 42 }, check_suite: { conclusion: 'failure', pull_requests: [{}] } })
     const res = await deliver(body, `sha256=${await hmacSha256Hex('gh-hook', body)}`)
     expect(await res.json()).toEqual({ delivered: 1 })
     expect((await inbox(auth)).at(-1)!.payload).toEqual({ kind: 'github.webhook', event: 'check_suite', deliveryId: 'd-1', payload: JSON.parse(body) })
   })
 
-  it('adds new installations to the grant of the installing user', async () => {
-    const { auth } = await registerDevice()
+  it('adds new installations to the grant of the installing user without enqueueing them', async () => {
+    const { auth, userId } = await registerDevice()
     mockGithubOAuth()
     await connect(auth, 'github')
     const install = JSON.stringify({ action: 'created', installation: { id: 99 }, sender: { id: 7 } })
-    expect(await (await deliver(install, `sha256=${await hmacSha256Hex('gh-hook', install)}`, 'installation')).json()).toEqual({ delivered: 1 })
+    expect(await (await deliver(install, `sha256=${await hmacSha256Hex('gh-hook', install)}`, 'installation')).json()).toEqual({ delivered: 0 })
+    expect(await routingKeys(userId)).toContain('installation:99')
+  })
+
+  it('drops events and actions the desktop ignores', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github')
+    const cases: [string, unknown][] = [
+      ['check_suite', { action: 'completed', check_suite: { conclusion: 'success' } }],
+      ['check_run', { action: 'created', check_run: { conclusion: 'failure', pull_requests: [{}] } }],
+      ['check_run', { action: 'completed', check_run: { conclusion: 'failure', pull_requests: [] } }],
+      ['pull_request', { action: 'labeled' }],
+      ['push', {}],
+    ]
+    for (const [event, payload] of cases) {
+      const body = JSON.stringify({ ...(payload as object), installation: { id: 42 } })
+      expect(await (await deliver(body, `sha256=${await hmacSha256Hex('gh-hook', body)}`, event)).json()).toEqual({ delivered: 0 })
+    }
+    const checkRun = JSON.stringify({ action: 'completed', installation: { id: 42 }, check_run: { conclusion: 'timed_out', pull_requests: [{}] } })
+    expect(await (await deliver(checkRun, `sha256=${await hmacSha256Hex('gh-hook', checkRun)}`, 'check_run')).json()).toEqual({ delivered: 1 })
+    expect((await inbox(auth)).filter((i) => i.payload.kind === 'github.webhook')).toHaveLength(1)
   })
 
   it('routes an org installation by another sender to members who can access it', async () => {
@@ -465,7 +508,7 @@ describe('github webhook', () => {
     const { auth } = await registerDevice()
     mockGithubOAuth()
     await connect(auth, 'github')
-    const body = JSON.stringify({ action: 'completed', installation: { id: 42 } })
+    const body = JSON.stringify({ action: 'completed', installation: { id: 42 }, check_suite: { conclusion: 'failure', pull_requests: [{}] } })
     const signature = `sha256=${await hmacSha256Hex('gh-hook', body)}`
     expect(await (await deliver(body, signature)).json()).toEqual({ delivered: 1 })
     expect(await (await deliver(body, signature)).json()).toEqual({ delivered: 0 })
