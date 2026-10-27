@@ -188,7 +188,7 @@ Actionable {
 
 ## 8. Integrations
 
-All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
+All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. One grant per provider in v1 (one GitHub account, one Slack workspace, one Gmail account); grants are keyed by provider so more can be added later. GitHub user tokens expire after 8 h and Google after 1 h; the app refreshes via the Worker's refresh route. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
 
 **Delivery**: webhooks → Worker → inbox (primary). Reconciliation polling every 5–10 min backfills and resolves state. Each poller tracks rate-limit headers and backs off before the limit (GitHub `x-ratelimit-remaining`, Slack `Retry-After`, Gmail quota units).
 
@@ -214,7 +214,7 @@ Settings: channel allow/deny list, "check unreplied after N minutes" (default 30
 | Unreplied mentions (LLM) | mentions re-checked after N min; LLM decides a reply is still owed |
 | Conversations needing follow-up (LLM) | threads/DMs where I posted in last 7 days; LLM finds commitments with a remaining next step |
 
-Cards include the original message text so the user can verify before dispatching. No automatic resolution: cards move only by manual action (Done, Dismiss, drag).
+Delivery: Slack Events API with user-token scopes delivers `message.channels`, `message.groups`, `message.im` for conversations the user belongs to, so no bot needs to join channels. Mentions are detected by scanning message text for the user's id. Cards include the original message text so the user can verify before dispatching. No automatic resolution: cards move only by manual action (Done, Dismiss, drag).
 
 ### 8.3 Email (Gmail)
 Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories (Promotions/Social/Updates/Forums), from-domain allow/deny, label filter. Optional **LLM "needs action" gate**. Polling only (no Pub/Sub). No automatic resolution: cards move only by manual action (Done, Dismiss, drag). Expired OAuth → "Reconnect required" state; existing cards kept; connection event logged.
@@ -293,7 +293,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 13. Worker
 
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
-- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
+- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
 - Webhook signature verification (GitHub HMAC, Slack signing secret).
 - Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
