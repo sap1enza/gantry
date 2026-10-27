@@ -1,0 +1,12 @@
+appId: dev.gantry.app
+productName: Gantry
+directories:
+  output: release
+files:
+  - out/**
+mac:
+  target: [dmg]
+  identity: null
+protocols:
+  - name: Gantry
+    schemes: [gantry]

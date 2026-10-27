@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - cloudflare-workers/*
+allowBuilds:
+  electron: true
+  esbuild: true
+  workerd: true
+  electron-winstaller: false

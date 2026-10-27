@@ -1,0 +1,81 @@
+import type { PermissionPreset } from './actionable'
+import { DEFAULT_ENABLED_TRIGGERS, type TriggerId } from './triggers'
+
+export type LlmProvider = 'anthropic' | 'openai' | 'openai_compatible'
+export type WorkspaceCleanup = 'delete' | 'keep' | 'ask'
+export type Appearance = 'system' | 'light' | 'dark'
+
+export interface CardFieldVisibility {
+  source: boolean
+  status: boolean
+  agent: boolean
+  receivedTime: boolean
+  repository: boolean
+  links: boolean
+  priority: boolean
+}
+
+export interface Settings {
+  workerUrl: string
+  defaultProvider: string
+  defaultModel?: string
+  workspaceLocation: string
+  defaultPermissionPreset: PermissionPreset
+  confirmBeforeDispatch: boolean
+  confirmBeforeStop: boolean
+  maxConcurrentAgents: number
+  workspaceCleanup: WorkspaceCleanup
+  keepCompleted: boolean
+  archiveDoneAfterDays: number
+  activityRetentionDays: number
+  triggers: Record<TriggerId, boolean>
+  github: { repositories: string[]; dependabotMinSeverity: 'low' | 'medium' | 'high' | 'critical'; issuesScope: 'assigned' | 'all' }
+  slack: { channelAllow: string[]; channelDeny: string[]; unrepliedAfterMinutes: number }
+  email: {
+    inboxOnly: boolean
+    unreadOnly: boolean
+    excludeCategories: string[]
+    domainAllow: string[]
+    domainDeny: string[]
+    labels: string[]
+    llmGate: boolean
+  }
+  llm: { provider: LlmProvider; model: string; baseUrl?: string }
+  notifications: { needsInput: boolean; completed: boolean; failed: boolean; newActionable: boolean }
+  launchAtLogin: boolean
+  appearance: Appearance
+  dockBadge: boolean
+  cardFields: CardFieldVisibility
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  workerUrl: 'http://localhost:8787',
+  defaultProvider: 'claude',
+  workspaceLocation: '~/Developer/Gantry',
+  defaultPermissionPreset: 'edit_test',
+  confirmBeforeDispatch: true,
+  confirmBeforeStop: true,
+  maxConcurrentAgents: 3,
+  workspaceCleanup: 'delete',
+  keepCompleted: true,
+  archiveDoneAfterDays: 7,
+  activityRetentionDays: 90,
+  triggers: DEFAULT_ENABLED_TRIGGERS,
+  github: { repositories: [], dependabotMinSeverity: 'high', issuesScope: 'assigned' },
+  slack: { channelAllow: [], channelDeny: [], unrepliedAfterMinutes: 30 },
+  email: {
+    inboxOnly: true,
+    unreadOnly: true,
+    excludeCategories: ['promotions', 'social', 'updates', 'forums'],
+    domainAllow: [],
+    domainDeny: [],
+    labels: [],
+    llmGate: false,
+  },
+  llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
+  notifications: { needsInput: true, completed: true, failed: true, newActionable: false },
+  launchAtLogin: false,
+  appearance: 'system',
+  dockBadge: true,
+  cardFields: { source: true, status: true, agent: true, receivedTime: false, repository: false, links: true, priority: false },
+}
