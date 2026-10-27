@@ -9,6 +9,7 @@ export interface Guard {
   hooksDir: string
   ghConfigDir: string
   worktreeConfig: string
+  release: () => Promise<void>
 }
 
 const TOKEN_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']
@@ -22,7 +23,8 @@ export function scrubEnv(env: NodeJS.ProcessEnv, preset: PermissionPreset, guard
   return scrubbed
 }
 
-export const prePushHook = (preset: PermissionPreset, branch: string, originalHooks: string) => `#!/bin/sh
+// shortcut: in full, `git push --no-verify` or `-c core.hooksPath=` skips this hook and only policy.ts's HOOK_BYPASS regex stops it; upgrade to a credential-holding push proxy if that matters.
+export const prePushHook =(preset: PermissionPreset, branch: string, originalHooks: string) => `#!/bin/sh
 preset=${shellQuote(preset)}
 branch=${shellQuote(branch)}
 if [ "$preset" != full ]; then
@@ -41,6 +43,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     exit 1 ;;
   esac
   case "$remote_sha" in *[!0]*)
+    if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+      echo "Gantry: the remote branch has commits you don't have; fetch and rebase first." >&2
+      exit 1
+    fi
     if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
       echo "Gantry: force pushes are not allowed." >&2
       exit 1
@@ -69,14 +75,13 @@ const git = async (cwd: string, ...args: string[]) =>
 
 export async function installGuard(request: DispatchRequest): Promise<Guard> {
   const cwd = request.worktreePath
-  const gitDir = await git(cwd, 'rev-parse', '--path-format=absolute', '--git-dir')
-  const commonDir = await git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+  const [gitDir, commonDir] = (await git(cwd, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir')).split('\n')
   if ((await git(cwd, 'config', '--get', 'extensions.worktreeConfig').catch(() => '')) !== 'true') {
     await git(cwd, 'config', 'extensions.worktreeConfig', 'true')
   }
   await git(cwd, 'config', '--worktree', '--unset', 'core.hooksPath').catch(() => '')
   const originalHooks = await git(cwd, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks')
-  const hooksDir = join(gitDir, 'gantry-hooks')
+  const hooksDir = join(gitDir!, 'gantry-hooks')
   rmSync(hooksDir, { recursive: true, force: true })
   mkdirSync(hooksDir, { recursive: true })
   const existing = existsSync(originalHooks) ? readdirSync(originalHooks) : []
@@ -87,7 +92,13 @@ export async function installGuard(request: DispatchRequest): Promise<Guard> {
   writeFileSync(join(hooksDir, 'pre-push'), prePushHook(request.permissionPreset, request.branch, originalHooks))
   chmodSync(join(hooksDir, 'pre-push'), 0o755)
   await git(cwd, 'config', '--worktree', 'core.hooksPath', hooksDir)
-  const ghConfigDir = join(gitDir, 'gantry-gh')
+  const ghConfigDir = join(gitDir!, 'gantry-gh')
   mkdirSync(ghConfigDir, { recursive: true })
-  return { commonDir, hooksDir, ghConfigDir, worktreeConfig: join(gitDir, 'config.worktree') }
+  return {
+    commonDir: commonDir!,
+    hooksDir,
+    ghConfigDir,
+    worktreeConfig: join(gitDir!, 'config.worktree'),
+    release: async () => void (await git(cwd, 'config', '--worktree', '--unset', 'core.hooksPath').catch(() => '')),
+  }
 }

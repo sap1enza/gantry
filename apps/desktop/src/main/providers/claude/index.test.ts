@@ -40,11 +40,13 @@ function setup(script: (turn: Turn) => AsyncGenerator<SDKMessage>, preset: Permi
     return Object.assign(script(turn), { interrupt: async () => interrupt() }) as unknown as Query
   })
   const exec = vi.fn<ClaudeDeps['exec']>(async () => ({ stdout: '2.9.4 (Claude Code)\n' }))
+  const release = vi.fn(async () => {})
   const guard = vi.fn<ClaudeDeps['guard']>(async () => ({
     commonDir: '/repo/.git',
     hooksDir: '/repo/.git/worktrees/wt/gantry-hooks',
     ghConfigDir: '/repo/.git/worktrees/wt/gantry-gh',
     worktreeConfig: '/repo/.git/worktrees/wt/config.worktree',
+    release,
   }))
   const provider = createClaudeProvider({ query: query as unknown as ClaudeDeps['query'], exec, guard })
   const request: DispatchRequest = {
@@ -59,7 +61,7 @@ function setup(script: (turn: Turn) => AsyncGenerator<SDKMessage>, preset: Permi
   const start = () => provider.start(request, (event) => events.push(event))
   const states = () => events.flatMap((event) => (event.type === 'state' ? [event.state] : []))
   const question = () => vi.waitFor(() => events.findLast((event) => event.type === 'question') ?? Promise.reject())
-  return { provider, events, turns, exec, guard, start, states, question }
+  return { provider, events, turns, exec, guard, release, start, states, question }
 }
 
 const ask = (turn: Turn, tool: string, input: Record<string, unknown>) =>
@@ -81,11 +83,12 @@ describe('claude provider', () => {
 
   it('installs the guard and runs sandboxed without GitHub credentials outside full', async () => {
     vi.stubEnv('GH_TOKEN', 'secret')
-    const { start, states, turns, guard } = setup(async function* () {
+    const { start, states, turns, guard, release } = setup(async function* () {
       yield result('success')
     })
     await start()
     await vi.waitFor(() => expect(states()).toEqual(['running', 'completed']))
+    expect(release).toHaveBeenCalledOnce()
     expect(guard).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: '/tmp/wt', branch: 'gantry/GT-1-fix' }))
     expect(turns[0]!.options.env).toMatchObject({ GH_CONFIG_DIR: '/repo/.git/worktrees/wt/gantry-gh' })
     expect(turns[0]!.options.env!.GH_TOKEN).toBeUndefined()

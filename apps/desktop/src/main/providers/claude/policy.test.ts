@@ -5,7 +5,13 @@ import type { Guard } from './guard'
 import { decide, presetOptions, sandboxFor } from './policy'
 
 const WT = '/code/wt'
-const guard: Guard = { commonDir: '/code/repo/.git', hooksDir: '/g/hooks', ghConfigDir: '/g/gh', worktreeConfig: '/g/config.worktree' }
+const guard: Guard = {
+  commonDir: '/code/repo/.git',
+  hooksDir: '/g/hooks',
+  ghConfigDir: '/g/gh',
+  worktreeConfig: '/g/config.worktree',
+  release: async () => {},
+}
 
 const bash = (command: string) => ['Bash', { command }] as const
 
@@ -28,7 +34,11 @@ describe('decide', () => {
     ['read_only', ...bash('git diff --output=p'), 'deny'],
     ['read_only', ...bash('tree -o out'), 'deny'],
     ['read_only', ...bash('grep -o foo a.ts'), 'allow'],
-    ['read_only', 'Agent', {}, 'deny'],
+    ['read_only', 'Skill', {}, 'deny'],
+    ['read_only', 'Agent', { prompt: 'explore' }, 'allow'],
+    ['read_only', 'Glob', { pattern: '~/.ssh/*' }, 'ask'],
+    ['read_only', 'Glob', { pattern: 'src/**/*.ts' }, 'allow'],
+    ['full', ...bash('git config extensions.worktreeConfig false && git push'), 'deny'],
     ['read_only', 'Read', { file_path: '/Users/me/.aws/credentials' }, 'ask'],
     ['read_only', 'Read', { file_path: '~/.aws/credentials' }, 'ask'],
     ['read_only', 'Grep', { pattern: 'x', path: '../other' }, 'ask'],
@@ -87,7 +97,7 @@ describe('presetOptions', () => {
 })
 
 describe('sandboxFor', () => {
-  const guarded = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig]
+  const guarded = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig, '/code/repo/.git/config']
 
   it('enforces the sandbox with no escape hatch in every preset', () => {
     for (const preset of ['read_only', 'edit_test', 'full'] as const) {
@@ -114,7 +124,7 @@ describe('sandboxFor', () => {
     expect(sandboxFor('full', WT, guard)).toMatchObject({
       filesystem: { denyWrite: guarded },
       network: { allowedDomains: ['*'] },
-      excludedCommands: ['git push *', 'git fetch *', 'git pull *'],
+      excludedCommands: ['git push', 'git push *', 'git fetch *', 'git pull *', 'gh *'],
     })
   })
 })

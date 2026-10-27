@@ -46,6 +46,22 @@ describe('pre-push hook', () => {
     expect(push('-f', `HEAD:refs/heads/${BRANCH}`)).toMatch(/force pushes are not allowed/)
   })
 
+  it('asks to fetch first when the remote branch has commits the worktree lacks', async () => {
+    const { git, worktreePath, push } = await repo('full')
+    const root = join(worktreePath, '..')
+    git(root, 'clone', '-q', 'remote.git', 'other')
+    git(join(root, 'other'), 'commit', '-q', '--allow-empty', '-m', 'theirs')
+    git(join(root, 'other'), 'push', '-q', 'origin', `HEAD:refs/heads/${BRANCH}`)
+    git(worktreePath, 'commit', '-q', '--allow-empty', '-m', 'ours')
+    expect(push(`HEAD:refs/heads/${BRANCH}`)).toMatch(/fetch and rebase first/)
+  })
+
+  it('stops guarding once released', async () => {
+    const { guard, push } = await repo('edit_test')
+    await guard.release()
+    expect(push(`HEAD:refs/heads/${BRANCH}`)).toBe('ok')
+  })
+
   it.each<PermissionPreset>(['read_only', 'edit_test'])('rejects every push in %s', async (preset) => {
     const { push } = await repo(preset)
     expect(push(`HEAD:refs/heads/${BRANCH}`)).toMatch(/pushing is not allowed/)

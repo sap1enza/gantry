@@ -7,7 +7,22 @@ import type { Guard } from './guard'
 export type Decision = PermissionResult | { behavior: 'ask' }
 
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit']
-const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'LS', 'Bash', 'WebFetch', 'WebSearch', 'AskUserQuestion', 'TodoWrite', 'ToolSearch']
+const READ_ONLY_TOOLS = [
+  'Read',
+  'Grep',
+  'Glob',
+  'Bash',
+  'BashOutput',
+  'KillShell',
+  'WebFetch',
+  'WebSearch',
+  'AskUserQuestion',
+  'TodoWrite',
+  'ToolSearch',
+  'Task',
+  'Agent',
+  'TaskOutput',
+]
 const PATH_KEYS = ['file_path', 'notebook_path', 'path']
 const WEB_TOOLS = ['WebFetch', 'WebSearch']
 const READ_ONLY_COMMAND =
@@ -15,7 +30,7 @@ const READ_ONLY_COMMAND =
 const UNSAFE_SHELL = /[`$>]|<\(|-delete\b|-exec\b|-ok\b|-fprint|--pre\b|--output\b|\btree\b.*\s-o\b/
 const REMOTE_MUTATION =
   /\bgit\b[^;&|\n]*\spush\b|\bgh\s+(pr|issue|release|repo|gist|workflow|run|secret|variable|label)\s+(create|merge|close|reopen|edit|comment|review|delete|ready|upload|rerun|cancel|set|fork)\b|\bgh\s+api\b.*\s(-X|--method|-f|-F|--field|--raw-field|--input)|\b(npm|pnpm|yarn)\s+publish\b/
-const HOOK_BYPASS = /--no-verify\b|\bcore\.hookspath\b/i
+const HOOK_BYPASS = /--no-verify\b|\bcore\.hookspath\b|\bextensions\.worktreeconfig\b/i
 const FULL_ALLOWED = /\bgit\b[^;&|\n]*\spush\b|\bgh\s+pr\s+create\b/g
 const PACKAGE_REGISTRIES = [
   'registry.npmjs.org',
@@ -44,8 +59,9 @@ export function isReadOnlyCommand(command: string): boolean {
     .every((segment) => !segment || READ_ONLY_COMMAND.test(segment))
 }
 
-export function isOutside(worktreePath: string, input: Record<string, unknown>): boolean {
-  return PATH_KEYS.some((key) => {
+export function isOutside(worktreePath: string, toolName: string, input: Record<string, unknown>): boolean {
+  const keys = toolName === 'Glob' && /^[~/]/.test(String(input.pattern)) ? [...PATH_KEYS, 'pattern'] : PATH_KEYS
+  return keys.some((key) => {
     if (typeof input[key] !== 'string') return false
     const path = resolve(worktreePath, (input[key] as string).replace(/^~(?=$|\/)/, homedir()))
     const inside = relative(worktreePath, path)
@@ -58,7 +74,7 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
   if (preset === 'read_only' && !READ_ONLY_TOOLS.includes(toolName)) {
     return deny(`Read-only preset: ${toolName} is not allowed. Report findings instead.`)
   }
-  if (isOutside(worktreePath, input)) return ask
+  if (isOutside(worktreePath, toolName, input)) return ask
   if (WEB_TOOLS.includes(toolName)) return preset === 'full' ? allow : ask
   if (toolName !== 'Bash') return allow
   const command = String(input.command ?? '')
@@ -75,7 +91,7 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
 }
 
 export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard: Guard): SandboxSettings {
-  const guardPaths = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig]
+  const guardPaths = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig, `${guard.commonDir}/config`]
   return {
     enabled: true,
     failIfUnavailable: true,
@@ -89,7 +105,7 @@ export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard
       preset === 'full'
         ? { allowedDomains: ['*'] }
         : { allowedDomains: preset === 'edit_test' ? PACKAGE_REGISTRIES : [], strictAllowlist: true },
-    ...(preset === 'full' && { excludedCommands: ['git push *', 'git fetch *', 'git pull *'] }),
+    ...(preset === 'full' && { excludedCommands: ['git push', 'git push *', 'git fetch *', 'git pull *', 'gh *'] }),
   }
 }
 

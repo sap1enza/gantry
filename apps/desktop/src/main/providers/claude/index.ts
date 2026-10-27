@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { summarizeTool, toEvents } from './events'
-import { installGuard, isExecutable, scrubEnv, shellQuote } from './guard'
+import { installGuard, isExecutable, scrubEnv, shellQuote, type Guard } from './guard'
 import { decide, presetOptions } from './policy'
 
 export { shellQuote }
@@ -104,9 +104,10 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
     run.active = true
     run.sink({ type: 'state', state: 'running' })
     let outcome: AgentState | undefined
+    let guard: Guard | undefined
     try {
       const { permissionPreset, worktreePath } = run.request
-      const guard = await deps.guard(run.request)
+      guard = await deps.guard(run.request)
       run.query = deps.query({
         prompt: userInput(prompt, closed),
         options: {
@@ -135,8 +136,9 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
       outcome = 'failed'
     } finally {
       run.close()
-      run.active = false
       run.query = undefined
+      await guard?.release()
+      run.active = false
     }
     if (!run.halt && !outcome) run.sink({ type: 'error', message: 'Claude exited without a result.' })
     run.sink({ type: 'state', state: run.halt ?? outcome ?? 'failed' })
