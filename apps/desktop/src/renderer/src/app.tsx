@@ -16,7 +16,8 @@ import { api, bridge } from './bridge'
 import { shortcutFor } from './lib/shortcuts'
 import { Modal } from './ui'
 
-export type View = 'triage' | 'activity' | 'connections' | 'preferences'
+const VIEWS = ['triage', 'activity', 'connections', 'preferences'] as const
+export type View = (typeof VIEWS)[number]
 
 interface DialogAction {
   label: string
@@ -85,7 +86,7 @@ export function usePush<T extends Parameters<Parameters<typeof bridge.onPush>[0]
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [view, setView] = useState<View>('triage')
+  const [view, setView] = useState<View>(() => (VIEWS.find((v) => `#${v}` === location.hash) ?? 'triage'))
   const [activityCard, setActivityCard] = useState<string>()
   const [snapshot, setSnapshot] = useState<BoardSnapshot>()
   const [filter, setFilter] = useState<BoardFilter>({})

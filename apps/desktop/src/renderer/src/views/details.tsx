@@ -10,6 +10,7 @@ const COLUMN_STATE: Record<string, string> = { todo: 'To-do', in_progress: 'In P
 export function stateLabel(a: Actionable) {
   if (a.dismissedAt) return 'Dismissed'
   if (a.archivedAt) return 'Archived'
+  if (a.snoozedUntil && new Date(a.snoozedUntil) > new Date()) return 'Snoozed'
   if (a.column === 'in_progress' && a.agentState) return a.agentState === 'running' ? 'Agent running' : AGENT_STATE_LABEL[a.agentState]
   return COLUMN_STATE[a.column] ?? 'Manual column'
 }

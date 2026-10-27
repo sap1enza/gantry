@@ -366,7 +366,7 @@ function Card({
           <>
             <SourceIcon name={card.source.kind} size={12} />
             <span className="truncate">
-              {card.source.kind === 'api' ? `${card.source.name} · API` : `${SOURCE_LABELS[card.source.kind]} · ${card.source.name}`}
+              {card.source.kind === 'api' ? `${card.source.name} · API` : [...new Set([SOURCE_LABELS[card.source.kind], card.source.name])].join(' · ')}
             </span>
           </>
         )}
