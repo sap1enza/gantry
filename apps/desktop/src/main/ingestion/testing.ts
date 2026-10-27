@@ -17,6 +17,7 @@ export function fakeDeps(worker?: Partial<WorkerClient>) {
     dismiss: vi.fn<IngestSink['dismiss']>(),
     logConnection: vi.fn<IngestSink['logConnection']>(),
     markSourceDisconnected: vi.fn<IngestSink['markSourceDisconnected']>(),
+    markSourceConnected: vi.fn<IngestSink['markSourceConnected']>(),
   }
   const deps = {
     sink,

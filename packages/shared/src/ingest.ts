@@ -48,4 +48,5 @@ export interface IngestSink {
   dismiss(idOrExternal: string): Promise<void>
   logConnection(provider: string, status: string, detail?: string): void
   markSourceDisconnected(kind: SourceKind): void
+  markSourceConnected(kind: SourceKind): void
 }

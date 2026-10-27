@@ -12,6 +12,7 @@ import {
   type Settings,
   type TriggerId,
 } from '@gantry/shared'
+import { PROVIDER_SOURCE } from '@gantry/shared'
 import type { IngestionDeps } from '../contracts'
 import { classify, LlmError } from './llm'
 
@@ -102,6 +103,7 @@ export function createCtx(deps: IngestionDeps) {
     all[p] = { ...prev, ...patch }
     deps.kv.set('connections', all)
     if (patch.status && patch.status !== prev.status) deps.sink.logConnection(p, patch.status, patch.detail)
+    if (patch.status === 'connected' && prev.status !== 'connected') deps.sink.markSourceConnected(PROVIDER_SOURCE[p])
     for (const l of listeners) l()
   }
 
