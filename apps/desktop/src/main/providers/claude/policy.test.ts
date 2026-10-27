@@ -72,6 +72,13 @@ describe('decide', () => {
     ['full', ...bash('cd x && gh secret set TOKEN'), 'ask'],
     ['full', ...bash('git checkout gh-pages'), 'allow'],
     ['full', ...bash('(gh repo delete o/r --yes)'), 'ask'],
+    ['full', ...bash('true;gh pr merge 3'), 'ask'],
+    ['full', ...bash('git push&&gh release create v1'), 'ask'],
+    ['full', ...bash("bash -c 'gh pr merge 3'"), 'ask'],
+    ['full', ...bash('"gh" secret set T'), 'ask'],
+    ['full', ...bash('/opt/homebrew/bin/gh pr merge 3'), 'ask'],
+    ['full', ...bash('gh pr create -Hother --fill'), 'ask'],
+    ['full', ...bash('gh pr create -R someone/else --fill'), 'ask'],
   ])('%s %s %j → %s', (preset, tool, input, behavior) => {
     expect(decide(preset, WT, tool, input).behavior).toBe(behavior)
   })
