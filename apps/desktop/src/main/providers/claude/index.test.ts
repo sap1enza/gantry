@@ -40,7 +40,15 @@ function setup(script: (turn: Turn) => AsyncGenerator<SDKMessage>, preset: Permi
     return Object.assign(script(turn), { interrupt: async () => interrupt() }) as unknown as Query
   })
   const exec = vi.fn<ClaudeDeps['exec']>(async () => ({ stdout: '2.9.4 (Claude Code)\n' }))
-  const provider = createClaudeProvider({ query: query as unknown as ClaudeDeps['query'], exec })
+  const release = vi.fn(async () => {})
+  const guard = vi.fn<ClaudeDeps['guard']>(async () => ({
+    commonDir: '/repo/.git',
+    hooksDir: '/repo/.git/worktrees/wt/gantry-hooks',
+    ghConfigDir: '/repo/.git/worktrees/wt/gantry-gh',
+    worktreeConfig: '/repo/.git/worktrees/wt/config.worktree',
+    release,
+  }))
+  const provider = createClaudeProvider({ query: query as unknown as ClaudeDeps['query'], exec, guard })
   const request: DispatchRequest = {
     actionableId: 'card-1',
     dispatchId: 'dispatch-1',
@@ -53,7 +61,7 @@ function setup(script: (turn: Turn) => AsyncGenerator<SDKMessage>, preset: Permi
   const start = () => provider.start(request, (event) => events.push(event))
   const states = () => events.flatMap((event) => (event.type === 'state' ? [event.state] : []))
   const question = () => vi.waitFor(() => events.findLast((event) => event.type === 'question') ?? Promise.reject())
-  return { provider, events, turns, exec, start, states, question }
+  return { provider, events, turns, exec, guard, release, start, states, question }
 }
 
 const ask = (turn: Turn, tool: string, input: Record<string, unknown>) =>
@@ -71,6 +79,45 @@ describe('claude provider', () => {
     expect(turns[0]!.options).toMatchObject({ cwd: '/tmp/wt', permissionMode: 'acceptEdits', resume: undefined })
     expect(events).toContainEqual({ type: 'session', sessionId: SESSION })
     expect(events).toContainEqual({ type: 'result', result: { summary: 'Done.', filesChanged: [], openQuestions: [] } })
+  })
+
+  it('installs the guard and runs sandboxed without GitHub credentials outside full', async () => {
+    vi.stubEnv('GH_TOKEN', 'secret')
+    const { start, states, turns, guard, release } = setup(async function* () {
+      yield result('success')
+    })
+    await start()
+    await vi.waitFor(() => expect(states()).toEqual(['running', 'completed']))
+    expect(release).toHaveBeenCalledOnce()
+    expect(guard).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: '/tmp/wt', branch: 'gantry/GT-1-fix' }))
+    expect(turns[0]!.options.env).toMatchObject({ GH_CONFIG_DIR: '/repo/.git/worktrees/wt/gantry-gh' })
+    expect(turns[0]!.options.env!.GH_TOKEN).toBeUndefined()
+    expect(turns[0]!.options.sandbox).toMatchObject({ enabled: true, network: { strictAllowlist: true } })
+    vi.unstubAllEnvs()
+  })
+
+  it('fails without running Claude when the guard cannot be installed', async () => {
+    const { start, events, states, turns, guard } = setup(async function* () {
+      yield result('success')
+    })
+    guard.mockRejectedValueOnce(new Error('not a git repository'))
+    await start()
+    await vi.waitFor(() => expect(states()).toEqual(['running', 'failed']))
+    expect(events).toContainEqual({ type: 'error', message: 'not a git repository' })
+    expect(turns).toHaveLength(0)
+  })
+
+  it('asks before reading outside the worktree', async () => {
+    let decision: PermissionResult | undefined
+    const { provider, start, question } = setup(async function* (turn) {
+      decision = await ask(turn, 'Read', { file_path: '/Users/me/.aws/credentials' })
+      yield result('success')
+    }, 'read_only')
+    await start()
+    const asked = (await question()) as { id: string; prompt: string }
+    expect(asked.prompt).toMatch(/Allow Read: .*credentials/)
+    await provider.answer('card-1', asked.id, 'Deny')
+    await vi.waitFor(() => expect(decision?.behavior).toBe('deny'))
   })
 
   it('fails when the query throws', async () => {

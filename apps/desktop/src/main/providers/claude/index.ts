@@ -3,17 +3,20 @@ import type { AskUserQuestionInput } from '@anthropic-ai/claude-agent-sdk/sdk-to
 import type { AgentEventSink, AgentProvider, AgentState, DispatchRequest } from '@gantry/shared'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { accessSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { summarizeTool, toEvents } from './events'
+import { installGuard, isExecutable, scrubEnv, shellQuote, type Guard } from './guard'
 import { decide, presetOptions } from './policy'
+
+export { shellQuote }
 
 export interface ClaudeDeps {
   query: typeof sdkQuery
   exec: (file: string, args: string[], options: { env: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>
   claudePath?: () => string | undefined
+  guard: typeof installGuard
 }
 
 interface Run {
@@ -34,15 +37,6 @@ const agentEnv = (): NodeJS.ProcessEnv => ({
   PATH: [process.env.PATH, `${homedir()}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'].filter(Boolean).join(':'),
 })
 
-const isExecutable = (path: string) => {
-  try {
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
-
 export const findClaude = (path = agentEnv().PATH ?? '') =>
   path
     .split(':')
@@ -50,9 +44,7 @@ export const findClaude = (path = agentEnv().PATH ?? '') =>
     .map((dir) => join(dir, 'claude'))
     .find(isExecutable)
 
-const defaultDeps: ClaudeDeps = { query: sdkQuery, exec: promisify(execFile), claudePath: findClaude }
-
-export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
+const defaultDeps: ClaudeDeps = { query: sdkQuery, exec: promisify(execFile), claudePath: findClaude, guard: installGuard }
 
 export const resumeCommand = (worktreePath: string, sessionId: string) =>
   `cd ${shellQuote(worktreePath)} && claude --resume ${shellQuote(sessionId)}`
@@ -98,7 +90,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
       }
       return { behavior: 'allow', updatedInput: { ...input, answers } }
     }
-    const decision = decide(run.request.permissionPreset, toolName, input)
+    const decision = decide(run.request.permissionPreset, run.request.worktreePath, toolName, input)
     if (decision.behavior !== 'ask') return decision
     const text = await ask(run, `Allow ${toolName}: ${summarizeTool(input)}?`, ['Allow', 'Deny'])
     if (text === undefined) return interrupted
@@ -112,7 +104,10 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
     run.active = true
     run.sink({ type: 'state', state: 'running' })
     let outcome: AgentState | undefined
+    let guard: Guard | undefined
     try {
+      const { permissionPreset, worktreePath } = run.request
+      guard = await deps.guard(run.request)
       run.query = deps.query({
         prompt: userInput(prompt, closed),
         options: {
@@ -120,10 +115,10 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
           model: run.request.model,
           resume: run.sessionId,
           abortController: run.abort,
-          env: agentEnv(),
+          env: scrubEnv(agentEnv(), permissionPreset, guard),
           pathToClaudeCodeExecutable: deps.claudePath?.(),
           canUseTool: canUseTool(run),
-          ...presetOptions(run.request.permissionPreset),
+          ...presetOptions(permissionPreset, worktreePath, guard),
         },
       })
       for await (const message of run.query) {
@@ -141,8 +136,9 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
       outcome = 'failed'
     } finally {
       run.close()
-      run.active = false
       run.query = undefined
+      await guard?.release()
+      run.active = false
     }
     if (!run.halt && !outcome) run.sink({ type: 'error', message: 'Claude exited without a result.' })
     run.sink({ type: 'state', state: run.halt ?? outcome ?? 'failed' })
