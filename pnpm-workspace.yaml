@@ -7,3 +7,4 @@ allowBuilds:
   esbuild: true
   workerd: true
   electron-winstaller: false
+minimumReleaseAge: 2880
