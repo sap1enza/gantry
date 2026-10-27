@@ -17,6 +17,6 @@ crons = ["17 * * * *"]
 [vars]
 PUBLIC_URL = "https://gantry-api.sapienzalucas.workers.dev"
 EMAIL_FROM = "Gantry <login@gantry.dev>"
-GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_ID = "Iv23liuWG8u4eHxUWxBn"
 SLACK_CLIENT_ID = ""
 GOOGLE_CLIENT_ID = ""
