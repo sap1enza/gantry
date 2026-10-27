@@ -14,6 +14,7 @@ const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt'],
   google: ['gmail.historyId'],
 }
+const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.', slack: 'slack.', google: 'gmail:' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
   github: 'https://github.com/settings/installations',
   slack: 'https://slack.com/apps/manage',
@@ -102,7 +103,7 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) 
 }
 
 function forget(ctx: Ctx, provider: OAuthProvider) {
-  ctx.forgetGrant(provider)
+  ctx.forget(provider, RETRY_PREFIX[provider])
   for (const key of PROVIDER_KV[provider]) ctx.deps.kv.delete(key)
   ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
   ctx.deps.sink.markSourceDisconnected(PROVIDER_SOURCE[provider])

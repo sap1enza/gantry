@@ -237,7 +237,7 @@ export function createCtx(deps: IngestionDeps) {
 
   async function retryable(key: string, describe: IngestSignal, run: () => Promise<unknown>) {
     const state = retries()[key]
-    if (state && state.retryAt > now()) return false
+    if (state && state.retryAt > now()) return state.attempts >= MAX_ATTEMPTS
     try {
       await run()
     } catch (e) {
@@ -249,6 +249,8 @@ export function createCtx(deps: IngestionDeps) {
       }
       report(e)
       deps.sink.logIgnored(describe, 'ignored:filtered', `Failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${errorMessage(e)}`)
+      saveRetries({ ...retries(), [key]: { attempts: MAX_ATTEMPTS, retryAt: now() + RETRY_FORGET_MS } })
+      return true
     }
     if (state) {
       const all = retries()
@@ -274,9 +276,10 @@ export function createCtx(deps: IngestionDeps) {
     emit,
     queued,
     retryable,
-    forgetGrant(p: OAuthProvider) {
+    forget(p: OAuthProvider, retryPrefix: string) {
       deps.secrets.delete(SECRET_KEYS.grant(p))
       grants.delete(p)
+      saveRetries(Object.fromEntries(Object.entries(retries()).filter(([k]) => !k.startsWith(retryPrefix))))
     },
     onChange(listener: () => void) {
       listeners.add(listener)

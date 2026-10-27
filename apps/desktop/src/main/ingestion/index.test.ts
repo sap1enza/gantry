@@ -77,7 +77,20 @@ describe('pollInbox', () => {
     await pollInbox(createCtx(deps))
     expect(worker.ack).toHaveBeenCalledWith(['2', '3'])
     expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 5 attempts: unavailable')
-    expect(deps.kv.get('ingestion.retries')).toEqual({})
+  })
+
+  it('remembers a given-up key so a recurring failure is logged once', async () => {
+    const deps = fakeDeps()
+    const ctx = createCtx(deps)
+    const run = vi.fn(async () => {
+      throw new Error('channel_not_found')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const s = { trigger: 'slack.follow_up', source: { kind: 'slack', name: 'Slack' }, externalKey: 'k', title: 't', occurredAt: '' } as const
+    expect(await ctx.retryable('k', s, run)).toBe(true)
+    expect(await ctx.retryable('k', s, run)).toBe(true)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(deps.sink.logIgnored).toHaveBeenCalledTimes(1)
   })
 
   it('handles a redelivered item only once', async () => {
@@ -170,7 +183,7 @@ describe('tokens and rate limits', () => {
     expect(worker.refreshGrant).toHaveBeenCalledWith('google', { force: false })
   })
 
-  it('decrypts a grant once and reloads it after a refresh or disconnect', async () => {
+  it('decrypts a grant once, reloads it after a refresh, and forgets it with its retries on disconnect', async () => {
     const worker = workerWith([])
     worker.refreshGrant.mockResolvedValue(grantFor('google', { id: 'g', login: 'me' }, 'new'))
     const deps = fakeDeps(worker)
@@ -183,8 +196,10 @@ describe('tokens and rate limits', () => {
     await ctx.refresh('google', true)
     await ctx.json('google', 'https://gmail.googleapis.com/x')
     expect(new Headers(fetch.mock.calls.at(-1)![1]!.headers).get('authorization')).toBe('Bearer new')
-    ctx.forgetGrant('google')
+    deps.kv.set('ingestion.retries', { 'gmail:m1': { attempts: 1, retryAt: NOW.getTime() }, 'inbox:1': { attempts: 1, retryAt: NOW.getTime() } })
+    ctx.forget('google', 'gmail:')
     expect(ctx.account('google')).toBeUndefined()
+    expect(Object.keys(deps.kv.get('ingestion.retries')!)).toEqual(['inbox:1'])
   })
 
   it('marks reconnect_required when refresh is rejected', async () => {
