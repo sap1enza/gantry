@@ -1,20 +1,19 @@
-import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider, type SourceKind } from '@gantry/shared'
+import { PROVIDER_SOURCE, type Actionable, type ConnectionInfo, type InboxItem, type IngestSignal, type OAuthProvider } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
-import { createCtx, NotConnectedError, ThrottledError, withTimeout, type Ctx } from './context'
+import { createCtx, isFatal, NotConnectedError, report, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
 import { emailContext, pollGmail } from './gmail'
 import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
 
 const INBOX_INTERVAL_MS = 15_000
-const MAX_ITEM_ATTEMPTS = 5
+const SEEN_ITEMS = 1_000
 const MAX_CONTEXT = 8_000
 const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
-  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt', 'slack.seenEvents'],
-  google: ['gmail.historyId', 'gmail.retry'],
+  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt'],
+  google: ['gmail.historyId'],
 }
-const SOURCE_KIND: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
   github: 'https://github.com/settings/installations',
   slack: 'https://slack.com/apps/manage',
@@ -35,22 +34,18 @@ const JOBS: Job[] = [
   { name: 'slack.followUp', provider: 'slack', interval: () => 3_600_000, run: scanFollowUps },
 ]
 
-function report(e: unknown) {
-  if (e instanceof ThrottledError || e instanceof NotConnectedError) return
-  console.error('[ingestion]', e)
-}
-
 type Exclusive = (run: () => Promise<void>) => Promise<void>
 
-async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) {
+function itemSignal(item: InboxItem): IngestSignal {
   const p = item.payload
+  const base = { trigger: 'api.custom', source: { kind: 'api', name: 'API' }, externalKey: item.id, occurredAt: item.receivedAt } as const
   switch (p.kind) {
     case 'actionable.create': {
       const r = p.request
       const name = r.source?.name ?? 'API'
-      await ctx.emit({
+      return {
+        ...base,
         id: p.id,
-        trigger: 'api.custom',
         source: { kind: 'api', name, icon: r.source?.icon },
         externalKey: `${name}:${r.external_id ?? p.id}`,
         title: r.title,
@@ -63,17 +58,38 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) 
         metadata: r.metadata,
         autoStart: r.auto_start,
         actor: p.tokenName,
-        occurredAt: item.receivedAt,
-      })
-      return
+      }
     }
     case 'actionable.update':
-      return ctx.deps.sink.applyPatch(p.target, p.patch)
+      return { ...base, externalKey: p.target, title: `Update ${p.target}` }
     case 'actionable.dismiss':
-      return ctx.deps.sink.dismiss(p.target)
+      return { ...base, externalKey: p.target, title: `Dismiss ${p.target}` }
+    case 'github.webhook':
+      return { ...base, source: { kind: 'github', name: 'GitHub' }, title: `GitHub ${p.event} webhook` }
+    case 'slack.event':
+      return { ...base, source: { kind: 'slack', name: 'Slack' }, title: 'Slack event' }
+    case 'connection':
+      return { ...base, source: { kind: PROVIDER_SOURCE[p.provider], name: p.provider }, title: `Connection ${p.status}` }
+  }
+}
+
+async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) {
+  const p = item.payload
+  switch (p.kind) {
+    case 'actionable.create':
+      await ctx.emit(itemSignal(item))
+      return
+    case 'actionable.update':
+      if (ctx.admit(itemSignal(item))) ctx.deps.sink.applyPatch(p.target, p.patch)
+      return
+    case 'actionable.dismiss':
+      if (ctx.admit(itemSignal(item))) await ctx.deps.sink.dismiss(p.target)
+      return
     case 'connection':
       if (p.status === 'connected') {
-        await ctx.refresh(p.provider)
+        await ctx.refresh(p.provider).catch((e) => {
+          if (!(e instanceof NotConnectedError)) throw e
+        })
         return
       }
       if (p.status === 'disconnected') return exclusive(async () => forget(ctx, p.provider))
@@ -86,10 +102,10 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) 
 }
 
 function forget(ctx: Ctx, provider: OAuthProvider) {
-  ctx.deps.secrets.delete(SECRET_KEYS.grant(provider))
+  ctx.forgetGrant(provider)
   for (const key of PROVIDER_KV[provider]) ctx.deps.kv.delete(key)
   ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
-  ctx.deps.sink.markSourceDisconnected(SOURCE_KIND[provider])
+  ctx.deps.sink.markSourceDisconnected(PROVIDER_SOURCE[provider])
 }
 
 function contextFor(ctx: Ctx, a: Actionable) {
@@ -100,29 +116,28 @@ function contextFor(ctx: Ctx, a: Actionable) {
   return undefined
 }
 
-export async function pollInbox(ctx: Ctx, failures: Map<string, number>, exclusive: Exclusive = (run) => run()) {
+export async function pollInbox(ctx: Ctx, exclusive: Exclusive = (run) => run()) {
   const worker = ctx.deps.worker()
   if (!worker) return
-  const { items } = await withTimeout(worker.inbox())
+  const { items } = await worker.inbox()
+  const seen = ctx.deps.kv.get<string[]>('inbox.seen') ?? []
   const handled: string[] = []
   for (const item of items) {
+    if (seen.includes(item.id)) {
+      handled.push(item.id)
+      continue
+    }
     try {
-      await handleInboxItem(ctx, item, exclusive)
-      failures.delete(item.id)
+      if (!(await ctx.retryable(`inbox:${item.id}`, itemSignal(item), () => handleInboxItem(ctx, item, exclusive)))) continue
     } catch (e) {
-      if (e instanceof ThrottledError) continue
-      const attempts = (failures.get(item.id) ?? 0) + 1
-      if (attempts < MAX_ITEM_ATTEMPTS) {
-        failures.set(item.id, attempts)
-        report(e)
-        break
-      }
-      console.error(`[ingestion] dropping inbox item ${item.id} after ${attempts} attempts`, e)
-      failures.delete(item.id)
+      if (!isFatal(e)) throw e
+      continue
     }
     handled.push(item.id)
+    seen.push(item.id)
   }
-  if (handled.length) await withTimeout(worker.ack(handled))
+  ctx.deps.kv.set('inbox.seen', seen.slice(-SEEN_ITEMS))
+  if (handled.length) await worker.ack(handled)
 }
 
 export function serial() {
@@ -142,26 +157,29 @@ export function serial() {
 export function createIngestion(deps: IngestionDeps): Ingestion {
   const ctx = createCtx(deps)
   const nextRun = new Map<string, number>()
-  const failures = new Map<string, number>()
   let timer: ReturnType<typeof setInterval> | undefined
   const inbox = serial()
   const jobs = serial()
 
   async function runJobs(force: boolean) {
-    for (const job of JOBS) {
-      if (!ctx.account(job.provider) || (!force && (nextRun.get(job.name) ?? 0) > ctx.now())) continue
-      nextRun.set(job.name, ctx.now() + job.interval())
-      try {
-        await job.run(ctx)
-        ctx.setConnection(job.provider, { lastSyncAt: ctx.iso() })
-      } catch (e) {
-        report(e)
-      }
-    }
+    await Promise.all(
+      PROVIDERS.map(async (provider) => {
+        for (const job of JOBS.filter((j) => j.provider === provider)) {
+          if (!ctx.account(provider) || (!force && (nextRun.get(job.name) ?? 0) > ctx.now())) continue
+          nextRun.set(job.name, ctx.now() + job.interval())
+          try {
+            await job.run(ctx)
+            ctx.setConnection(provider, { lastSyncAt: ctx.iso() })
+          } catch (e) {
+            report(e)
+          }
+        }
+      }),
+    )
   }
 
   async function schedule(force: boolean) {
-    await Promise.all([inbox(() => pollInbox(ctx, failures, (run) => jobs(run, true)).catch(report)), jobs(() => runJobs(force), force)])
+    await Promise.all([inbox(() => pollInbox(ctx, (run) => jobs(run, true)).catch(report)), jobs(() => runJobs(force), force)])
   }
 
   return {

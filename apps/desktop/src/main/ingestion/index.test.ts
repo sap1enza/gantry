@@ -20,14 +20,14 @@ describe('pollInbox', () => {
   it('processes items in order, maps API requests, then acks', async () => {
     const worker = workerWith([create('1', 'a'), create('2', 'b'), { id: '3', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'Honeybadger:hb-1' } }])
     const deps = fakeDeps(worker)
-    await pollInbox(createCtx(deps), new Map())
+    await pollInbox(createCtx(deps))
     expect(deps.sink.ingest.mock.calls.map(([s]) => s.externalKey)).toEqual(['Honeybadger:hb-1', 'Honeybadger:gen-2'])
     expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ id: 'gen-1', trigger: 'api.custom', source: { kind: 'api', name: 'Honeybadger' }, autoStart: true, actor: 'ci' })
     expect(deps.sink.dismiss).toHaveBeenCalledWith('Honeybadger:hb-1')
     expect(worker.ack).toHaveBeenCalledWith(['1', '2', '3'])
   })
 
-  it('stops at a failing item and acks only what succeeded', async () => {
+  it('logs a permanently failing item as filtered and keeps going', async () => {
     const worker = workerWith([create('1', 'a'), create('2', 'boom'), create('3', 'c')])
     const deps = fakeDeps(worker)
     deps.sink.ingest.mockImplementation((s) => {
@@ -35,10 +35,25 @@ describe('pollInbox', () => {
       return { outcome: 'created' }
     })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const failures = new Map<string, number>()
-    await pollInbox(createCtx(deps), failures)
-    expect(worker.ack).toHaveBeenCalledWith(['1'])
-    expect(failures.get('2')).toBe(1)
+    await pollInbox(createCtx(deps))
+    expect(worker.ack).toHaveBeenCalledWith(['1', '2', '3'])
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 1 attempt: db locked')
+  })
+
+  it('backs off a transiently failing item without blocking the ones behind it', async () => {
+    const worker = workerWith([{ id: '1', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'x' } }, create('2', 'a')])
+    const deps = fakeDeps(worker)
+    deps.sink.dismiss.mockRejectedValue(new TypeError('fetch failed'))
+    const ctx = createCtx(deps)
+    await pollInbox(ctx)
+    expect(worker.ack).toHaveBeenLastCalledWith(['2'])
+    await pollInbox(ctx)
+    expect(deps.sink.dismiss).toHaveBeenCalledTimes(1)
+    deps.now = () => new Date(NOW.getTime() + 61_000)
+    deps.sink.dismiss.mockResolvedValue()
+    await pollInbox(ctx)
+    expect(deps.sink.dismiss).toHaveBeenCalledTimes(2)
+    expect(worker.ack).toHaveBeenLastCalledWith(['1', '2'])
   })
 
   it('skips a throttled item without blocking the rest', async () => {
@@ -46,30 +61,51 @@ describe('pollInbox', () => {
     const worker = workerWith([throttled, create('2', 'a')])
     const deps = fakeDeps(worker)
     routeFetch([['api.github.com', () => res({}, 429, { 'retry-after': '60' })]])
-    await pollInbox(connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' })), new Map())
+    await pollInbox(connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' })))
     expect(worker.ack).toHaveBeenCalledWith(['2'])
   })
 
-  it('drops a poison item after repeated failures so the queue keeps moving', async () => {
+  it('drops a transiently failing item after its last attempt and logs why', async () => {
     const worker = workerWith([create('2', 'boom'), create('3', 'c')])
     const deps = fakeDeps(worker)
+    deps.kv.set('ingestion.retries', { 'inbox:2': { attempts: 4, retryAt: 0 } })
     deps.sink.ingest.mockImplementation((s) => {
-      if (s.title === 'boom') throw new Error('bad')
+      if (s.title === 'boom') throw new WorkerError(503, 'unavailable')
       return { outcome: 'created' }
     })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    await pollInbox(createCtx(deps), new Map([['2', 4]]))
+    await pollInbox(createCtx(deps))
     expect(worker.ack).toHaveBeenCalledWith(['2', '3'])
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 5 attempts: unavailable')
+    expect(deps.kv.get('ingestion.retries')).toEqual({})
   })
 
-  it('gives up on a worker inbox call that hangs', async () => {
-    vi.useFakeTimers()
-    const worker = { inbox: vi.fn(() => new Promise<never>(() => {})) }
-    const polled = pollInbox(createCtx(fakeDeps(worker)), new Map())
-    const assertion = expect(polled).rejects.toThrow('Timed out')
-    await vi.advanceTimersByTimeAsync(20_000)
-    await assertion
-    vi.useRealTimers()
+  it('handles a redelivered item only once', async () => {
+    const worker = workerWith([create('1', 'a')])
+    worker.ack.mockRejectedValueOnce(new Error('offline'))
+    const deps = fakeDeps(worker)
+    const ctx = createCtx(deps)
+    await expect(pollInbox(ctx)).rejects.toThrow('offline')
+    await pollInbox(ctx)
+    expect(deps.sink.ingest).toHaveBeenCalledTimes(1)
+    expect(worker.ack).toHaveBeenLastCalledWith(['1'])
+  })
+
+  it('respects the custom API trigger for updates and dismissals', async () => {
+    const worker = workerWith([
+      { id: '1', receivedAt: '', payload: { kind: 'actionable.update', target: 'x', patch: { title: 't' } } },
+      { id: '2', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'x' } },
+    ])
+    const deps = fakeDeps(worker)
+    deps.settings.triggers['api.custom'] = false
+    await pollInbox(createCtx(deps))
+    expect(deps.sink.applyPatch).not.toHaveBeenCalled()
+    expect(deps.sink.dismiss).not.toHaveBeenCalled()
+    expect(deps.sink.logIgnored.mock.calls.map(([x, outcome]) => [x.title, outcome])).toEqual([
+      ['Update x', 'ignored:trigger-off'],
+      ['Dismiss x', 'ignored:trigger-off'],
+    ])
+    expect(worker.ack).toHaveBeenCalledWith(['1', '2'])
   })
 
   it('stores the refreshed grant when a connection arrives', async () => {
@@ -77,7 +113,7 @@ describe('pollInbox', () => {
     worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'lucas' }, 'fresh'))
     const deps = fakeDeps(worker)
     const ingestion = createIngestion(deps)
-    await pollInbox(createCtx(deps), new Map())
+    await pollInbox(createCtx(deps))
     expect(JSON.parse(deps.secrets.get('grant.github')!).accessToken).toBe('fresh')
     expect(ingestion.connections()[0]).toMatchObject({ provider: 'github', status: 'connected', account: { login: 'lucas' } })
     expect(deps.sink.logConnection).toHaveBeenCalledWith('github', 'connected', undefined)
@@ -132,6 +168,23 @@ describe('tokens and rate limits', () => {
     routeFetch([['gmail', () => res({})]])
     await ctx.json('google', 'https://gmail.googleapis.com/x')
     expect(worker.refreshGrant).toHaveBeenCalledWith('google', { force: false })
+  })
+
+  it('decrypts a grant once and reloads it after a refresh or disconnect', async () => {
+    const worker = workerWith([])
+    worker.refreshGrant.mockResolvedValue(grantFor('google', { id: 'g', login: 'me' }, 'new'))
+    const deps = fakeDeps(worker)
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }, 'old'))
+    const read = vi.spyOn(deps.secrets, 'get')
+    const fetch = routeFetch([['gmail', () => res({})]])
+    await ctx.json('google', 'https://gmail.googleapis.com/x')
+    await ctx.json('google', 'https://gmail.googleapis.com/x')
+    expect(read).toHaveBeenCalledTimes(1)
+    await ctx.refresh('google', true)
+    await ctx.json('google', 'https://gmail.googleapis.com/x')
+    expect(new Headers(fetch.mock.calls.at(-1)![1]!.headers).get('authorization')).toBe('Bearer new')
+    ctx.forgetGrant('google')
+    expect(ctx.account('google')).toBeUndefined()
   })
 
   it('marks reconnect_required when refresh is rejected', async () => {
@@ -253,6 +306,20 @@ describe('createIngestion', () => {
     ingestion.stop()
     vi.useRealTimers()
     expect(worker.inbox).toHaveBeenCalledTimes(2)
+  })
+
+  it("runs other providers' jobs while one provider's job hangs", async () => {
+    const deps = fakeDeps(workerWith([]))
+    deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'lucas' })))
+    deps.secrets.set('grant.google', JSON.stringify(grantFor('google', { id: 'g', login: 'me' })))
+    routeFetch([
+      ['api.github.com', () => new Promise<never>(() => {}) as never],
+      ['/profile', () => res({ historyId: '1' })],
+      ['/messages?', () => res({})],
+    ])
+    const ingestion = createIngestion(deps)
+    void ingestion.syncNow()
+    await vi.waitFor(() => expect(ingestion.connections().find((c) => c.provider === 'google')?.lastSyncAt).toBeDefined())
   })
 
   it('opens the worker OAuth start URL on connect and revokes on disconnect', async () => {

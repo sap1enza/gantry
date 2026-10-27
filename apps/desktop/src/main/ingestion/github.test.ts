@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyReconciliation, apiUrlFor, currentFromSearch, githubRepositories, githubWebhook, mentionResolution, mentions, nextLink, reconcileGithub } from './github'
+import { applyReconciliation, apiUrlFor, currentFromSearch, eachLimit, githubRepositories, githubWebhook, mentionResolution, mentions, nextLink, reconcileGithub } from './github'
 import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
 
 const ME = { id: '1', login: 'lucas' }
@@ -323,6 +323,26 @@ describe('reconcileGithub', () => {
     expect(deps.kv.get('github.issuesSince')).toBe('2026-10-27T12:00:00.000Z')
   })
 
+  it('stops paging newest-first issues once past the scan start unless a tracked issue is still unseen', async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = ['acme/app']
+    deps.settings.github.issuesScope = 'all'
+    deps.settings.triggers = { ...deps.settings.triggers, 'github.issue': true, 'github.dependabot': false }
+    const page1 = () => res([{ html_url: 'https://github.com/acme/app/issues/9', number: 9, title: 'Old', created_at: '2020-01-02T00:00:00Z' }], 200, { link: '<https://api.github.com/repos/acme/app/issues?page=2>; rel="next"' })
+    const fetch = routeFetch([
+      ['/graphql', emptySearch],
+      ['issues?page=2', () => res([{ html_url: 'https://github.com/acme/app/issues/1', number: 1, title: 'Tracked', created_at: '2020-01-01T00:00:00Z' }])],
+      ['/repos/acme/app/issues?', page1],
+    ])
+    await reconcileGithub(ctx)
+    expect(fetch.mock.calls.map(([url]) => String(url)).filter((u) => u.includes('/issues?'))).toEqual(['https://api.github.com/repos/acme/app/issues?state=open&sort=created&direction=desc&per_page=100'])
+    deps.kv.set('github.active', { 'github.issue': ['https://github.com/acme/app/issues/1'] })
+    fetch.mockClear()
+    await reconcileGithub(ctx)
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('page=2'))).toHaveLength(1)
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
+  })
+
   it("skips repositories with issues disabled in scope 'all'", async () => {
     const { ctx, deps } = setup()
     deps.settings.github.repositories = ['acme/off', 'acme/app']
@@ -405,6 +425,20 @@ describe('githubRepositories', () => {
 })
 
 describe('helpers', () => {
+  it('runs at most the limit concurrently and covers every item', async () => {
+    let running = 0
+    let peak = 0
+    const seen: number[] = []
+    await eachLimit([1, 2, 3, 4, 5], async (n) => {
+      peak = Math.max(peak, ++running)
+      await new Promise((r) => setTimeout(r, 1))
+      seen.push(n)
+      running--
+    }, 2)
+    expect(peak).toBe(2)
+    expect(seen.sort()).toEqual([1, 2, 3, 4, 5])
+  })
+
   it('reads the next page from a Link header', () => {
     expect(nextLink(new Headers({ link: '<https://a/1?page=2>; rel="next", <https://a/1?page=5>; rel="last"' }))).toBe('https://a/1?page=2')
     expect(nextLink(new Headers({ link: '<https://a/1?page=1>; rel="prev"' }))).toBeUndefined()

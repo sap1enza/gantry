@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS } from '@gantry/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emailFilter, pollGmail, type GmailMessage } from './gmail'
-import { connectedCtx, fakeDeps, grantFor, res, routeFetch } from './testing'
+import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
 
 const msg = (labelIds: string[], from = 'Ana <ana@acme.com>'): GmailMessage => ({
   id: 'm1',
@@ -70,16 +70,17 @@ describe('pollGmail', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await pollGmail(ctx)
     expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['t2'])
-    expect(deps.kv.get('gmail.retry')).toEqual(['m1'])
+    expect(Object.keys(deps.kv.get('ingestion.retries')!)).toEqual(['gmail:m1'])
     expect(deps.kv.get('gmail.historyId')).toBe('200')
     flaky.status = 200
+    deps.now = () => new Date(NOW.getTime() + 61_000)
     routeFetch([
       ['/history?', () => res({ historyId: '201' })],
       ['/messages/m1', () => res(msg(['INBOX', 'UNREAD']))],
     ])
     await pollGmail(ctx)
     expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['t2', 't1'])
-    expect(deps.kv.get('gmail.retry')).toEqual([])
+    expect(deps.kv.get('ingestion.retries')).toEqual({})
   })
 
   it('queues the rest of the batch when throttled mid-way', async () => {
@@ -91,7 +92,7 @@ describe('pollGmail', () => {
       [/\/messages\/m\d/, () => res({ error: { errors: [{ reason: 'rateLimitExceeded' }] } }, 403)],
     ])
     await expect(pollGmail(ctx)).rejects.toThrow('throttled')
-    expect(deps.kv.get('gmail.retry')).toEqual(['m1', 'm2'])
+    expect(Object.keys(deps.kv.get('ingestion.retries')!)).toEqual(['gmail:m1', 'gmail:m2'])
     expect(deps.kv.get('gmail.historyId')).toBe('200')
   })
 })

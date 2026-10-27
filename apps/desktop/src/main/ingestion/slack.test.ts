@@ -71,13 +71,6 @@ describe('slackEvent', () => {
     expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['C0UNKNOWN:1', 'C0UNKNOWN:2'])
     expect(deps.sink.logConnection.mock.calls.filter(([, st]) => st === 'missing_scope')).toHaveLength(1)
   })
-
-  it('handles a retried Slack event only once', async () => {
-    const { ctx, deps } = setup()
-    await slackEvent(ctx, { event_id: 'Ev1', event: message() } as never)
-    await slackEvent(ctx, { event_id: 'Ev1', event: message() } as never)
-    expect(deps.sink.ingest).toHaveBeenCalledTimes(1)
-  })
 })
 
 describe('checkUnreplied', () => {

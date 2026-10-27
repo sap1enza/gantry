@@ -1,12 +1,10 @@
 import type { IngestSignal } from '@gantry/shared'
-import { skipUnlessFatal, type Ctx } from './context'
+import type { Ctx } from './context'
 
 const SOURCE = { kind: 'slack', name: 'Slack' } as const
 const DM_TYPES = new Set(['im', 'mpim'])
 const FOLLOW_UP_WINDOW_MS = 7 * 24 * 3600_000
-const PENDING_GIVE_UP_MS = 24 * 3600_000
 const MISSING_SCOPE_LOG_MS = 3600_000
-const SEEN_EVENT_TTL_MS = 24 * 3600_000
 const CHANNEL_ID = /^[CG][A-Z0-9]{6,}$/
 const UNREPLIED_INSTRUCTION =
   'You review a Slack conversation for the user marked "ME". Decide whether ME still owes a reply to the message marked "MENTION". decision=true only if a response from ME is still expected.'
@@ -102,15 +100,8 @@ function messageSignal(ctx: Ctx, m: SlackMessage & { channel: string }, trigger:
   }
 }
 
-export async function slackEvent(ctx: Ctx, payload: { event?: SlackMessage; event_id?: string } & SlackMessage) {
-  const seen = ctx.deps.kv.get<Record<string, number>>('slack.seenEvents') ?? {}
-  if (payload.event_id && seen[payload.event_id]) return
-  if (!(await handleMessage(ctx, payload.event ?? payload)) || !payload.event_id) return
-  const fresh = Object.entries(seen).filter(([, at]) => ctx.now() - at < SEEN_EVENT_TTL_MS)
-  ctx.deps.kv.set('slack.seenEvents', Object.fromEntries([...fresh, [payload.event_id, ctx.now()]]))
-}
-
-async function handleMessage(ctx: Ctx, m: SlackMessage) {
+export async function slackEvent(ctx: Ctx, payload: { event?: SlackMessage } & SlackMessage) {
+  const m = payload.event ?? payload
   const me = ctx.account('slack')?.id
   if (!me || m.type !== 'message' || !m.channel || (m.subtype && m.subtype !== 'thread_broadcast')) return
   if (m.user === me || !isMention(m, me)) return
@@ -122,7 +113,6 @@ async function handleMessage(ctx: Ctx, m: SlackMessage) {
     const pending = ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []
     ctx.deps.kv.set('slack.pending', [...pending, { channel: m.channel, ts: m.ts, threadTs: m.thread_ts, dueAt, signal: { ...s, trigger: 'slack.unreplied' } }])
   }
-  return true
 }
 
 async function conversation(ctx: Ctx, channel: string, ts: string, threadTs?: string) {
@@ -142,17 +132,13 @@ export async function checkUnreplied(ctx: Ctx) {
   const done = new Set<string>()
   try {
     for (const p of pending().filter((x) => x.dueAt <= ctx.now())) {
-      try {
-        if (ctx.triggerOn('slack.unreplied')) {
-          const messages = await conversation(ctx, p.channel, p.ts, p.threadTs)
-          const replied = messages.some((x) => x.user === me && Number(x.ts) > Number(p.ts))
-          await ctx.emit(p.signal, replied ? { filtered: 'Already replied' } : { llm: { instruction: UNREPLIED_INSTRUCTION, content: transcript(messages, me, p.ts) } })
-        } else await ctx.emit(p.signal)
-        done.add(p.signal.externalKey)
-      } catch (e) {
-        skipUnlessFatal(e)
-        if (ctx.now() - p.dueAt > PENDING_GIVE_UP_MS) done.add(p.signal.externalKey)
-      }
+      const settled = await ctx.retryable(`slack.unreplied:${p.signal.externalKey}`, p.signal, async () => {
+        if (!ctx.triggerOn('slack.unreplied')) return ctx.emit(p.signal)
+        const messages = await conversation(ctx, p.channel, p.ts, p.threadTs)
+        const replied = messages.some((x) => x.user === me && Number(x.ts) > Number(p.ts))
+        return ctx.emit(p.signal, replied ? { filtered: 'Already replied' } : { llm: { instruction: UNREPLIED_INSTRUCTION, content: transcript(messages, me, p.ts) } })
+      })
+      if (settled) done.add(p.signal.externalKey)
     }
   } finally {
     if (done.size) ctx.deps.kv.set('slack.pending', pending().filter((x) => !done.has(x.signal.externalKey)))
@@ -190,17 +176,15 @@ export async function scanFollowUps(ctx: Ctx) {
   )
   try {
     for (const [key, { channel, threadTs }] of threads) {
-      try {
+      const describe = { ...messageSignal(ctx, { ts: threadTs, channel }, 'slack.follow_up'), externalKey: key }
+      await ctx.retryable(`slack.followUp:${key}`, describe, async () => {
         const thread = await conversation(ctx, channel, threadTs, threadTs)
         const last = thread.at(-1)?.ts ?? threadTs
-        if (checked[key] === last) continue
+        if (checked[key] === last) return
         const root = thread[0] ?? { ts: threadTs }
-        const s = { ...messageSignal(ctx, { ...root, channel }, 'slack.follow_up'), externalKey: `${channel}:${threadTs}` }
-        await ctx.emit(s, { filtered: await channelFilter(ctx, channel), llm: { instruction: FOLLOW_UP_INSTRUCTION, content: transcript(thread, me) } })
+        await ctx.emit({ ...messageSignal(ctx, { ...root, channel }, 'slack.follow_up'), externalKey: key }, { filtered: await channelFilter(ctx, channel), llm: { instruction: FOLLOW_UP_INSTRUCTION, content: transcript(thread, me) } })
         checked[key] = last
-      } catch (e) {
-        skipUnlessFatal(e)
-      }
+      })
     }
   } finally {
     ctx.deps.kv.set('slack.followUpChecked', checked)
