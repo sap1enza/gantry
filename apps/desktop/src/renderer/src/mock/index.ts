@@ -44,6 +44,7 @@ export function createMockBridge(opts: MockOptions = {}): GantryBridge & { state
   const transcripts = new Map<string, TranscriptEntry[]>()
 
   const emit = (p: GantryPush) => listeners.forEach((l) => l(p))
+  let pendingAuth: (() => void) | undefined
   const find = (id: string) => {
     const a = state.actionables.find((x) => x.id === id)
     if (!a) throw new Error(`Actionable ${id} not found`)
@@ -423,13 +424,14 @@ export function createMockBridge(opts: MockOptions = {}): GantryBridge & { state
         return structuredClone(state.connections)
       },
       async connect(provider) {
-        const c = state.connections.find((x) => x.provider === provider)!
-        c.status = 'connected'
-        c.account ??= { login: provider === 'google' ? 'alex@acme.dev' : 'alexlee', team: provider === 'github' ? 'acme organization' : 'Acme workspace' }
-        c.lastSyncAt = now().toISOString()
-        c.detail = undefined
-        log('connection', undefined, `${provider === 'google' ? 'Email' : SOURCE_LABEL[provider]} connected`, { source: SOURCE_LABEL[provider === 'google' ? 'email' : provider], actor: { kind: 'gantry', name: 'Gantry' } })
-        emit({ type: 'connections.changed' })
+        pendingAuth = () => {
+          const c = state.connections.find((x) => x.provider === provider)!
+          c.status = 'connected'
+          c.account ??= { login: provider === 'google' ? 'alex@acme.dev' : 'alexlee', team: provider === 'github' ? 'acme organization' : 'Acme workspace' }
+          c.lastSyncAt = now().toISOString()
+          c.detail = undefined
+          log('connection', undefined, `${provider === 'google' ? 'Email' : SOURCE_LABEL[provider]} connected`, { source: SOURCE_LABEL[provider === 'google' ? 'email' : provider], actor: { kind: 'gantry', name: 'Gantry' } })
+        }
       },
       async disconnect(provider) {
         const c = state.connections.find((x) => x.provider === provider)!
@@ -521,12 +523,17 @@ export function createMockBridge(opts: MockOptions = {}): GantryBridge & { state
         state.account.name = name
       },
       async signIn(method, email) {
-        state.account.signedIn = true
-        if (method === 'github') state.account.githubLogin = 'alexlee'
-        else state.account.email = email
+        pendingAuth = () => {
+          state.account.signedIn = true
+          if (method === 'github') state.account.githubLogin = 'alexlee'
+          else state.account.email = email
+        }
       },
       async completeAuth() {
-        state.account.signedIn = true
+        if (!pendingAuth) throw new Error('That code is invalid or expired')
+        pendingAuth()
+        pendingAuth = undefined
+        emit({ type: 'connections.changed' })
       },
       async signOut() {
         state.account.signedIn = false

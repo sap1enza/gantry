@@ -6,6 +6,7 @@ import { api } from '../bridge'
 import { SHORTCUT_LIST } from '../lib/shortcuts'
 import { SNOOZE_PRESETS } from '../lib/snooze'
 import { Github, Modal, PRESET_LABEL, Select, Tag, Toggle } from '../ui'
+import { FinishInBrowser, useBrowserAuth } from './connections'
 
 function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
   return (
@@ -45,6 +46,7 @@ export function PreferencesView() {
   if (!s) return null
   const set = (patch: Partial<Settings>) => app.updateSettings(patch)
   const acc = app.account
+  const auth = useBrowserAuth()
 
   return (
     <>
@@ -307,10 +309,7 @@ export function PreferencesView() {
                   ) : (
                     <button
                       className="btn"
-                      onClick={async () => {
-                        await app.run(api.account.signIn('github'))
-                        await app.reloadAccount()
-                      }}
+                      onClick={() => auth.start(api.account.signIn('github'))}
                     >
                       <Github size={13} /> GitHub
                     </button>
@@ -322,16 +321,13 @@ export function PreferencesView() {
                     <button
                       className="btn"
                       disabled={!/^\S+@\S+\.\S+$/.test(email)}
-                      onClick={async () => {
-                        await app.run(api.account.signIn('email', email))
-                        await app.reloadAccount()
-                        app.toast(`Magic link sent to ${email}`)
-                      }}
+                      onClick={async () => (await auth.start(api.account.signIn('email', email))) && app.toast(`Magic link sent to ${email}`)}
                     >
                       <Mail size={13} /> Send
                     </button>
                   </Row>
                 )}
+                {auth.pending && <FinishInBrowser onClose={auth.clear} />}
                 <Row title="Device">
                   <span className="mono muted selectable">{acc?.deviceId ?? '—'}</span>
                 </Row>

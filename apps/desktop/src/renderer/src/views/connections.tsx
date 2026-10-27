@@ -1,5 +1,5 @@
 import { TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
-import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, Mail, RefreshCw, Send, ShieldCheck, Webhook } from 'lucide-react'
+import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, Mail, RefreshCw, Send, ShieldCheck, Webhook, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
@@ -15,6 +15,48 @@ const TRIGGER_HINT: Partial<Record<TriggerId, string>> = {
 const LLM_TRIGGERS = new Set<TriggerId>(['slack.unreplied', 'slack.follow_up'])
 const CATEGORIES = ['promotions', 'social', 'updates', 'forums']
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
+
+export function useBrowserAuth() {
+  const app = useApp()
+  const [pending, setPending] = useState(false)
+  useEffect(() => setPending(false), [app.account])
+  usePush('connections.changed', () => {
+    if (!pending) return
+    setPending(false)
+    void app.reloadAccount()
+  })
+  return {
+    pending,
+    clear: () => setPending(false),
+    async start(p: Promise<void>) {
+      const started = !!(await app.run(p.then(() => true)))
+      if (started) setPending(true)
+      return started
+    },
+  }
+}
+
+export function FinishInBrowser({ onClose }: { onClose(): void }) {
+  const app = useApp()
+  const [code, setCode] = useState('')
+  const submit = async () => void ((await app.run(api.account.completeAuth(code.trim()).then(() => true))) && onClose())
+  return (
+    <div className="banner">
+      <ExternalLink size={15} />
+      <div className="grow">
+        <b>Finish in your browser</b>
+        Gantry continues automatically. If it doesn't, paste the code shown in the browser.
+      </div>
+      <input className="field mono" style={{ width: 160 }} placeholder="Paste code" aria-label="Completion code" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && code.trim() && submit()} />
+      <button className="btn sm" disabled={!code.trim()} onClick={submit}>
+        Finish
+      </button>
+      <button className="icon-btn" aria-label="Cancel" onClick={onClose}>
+        <X size={13} />
+      </button>
+    </div>
+  )
+}
 
 export function ConnectionsView() {
   const app = useApp()
@@ -56,6 +98,7 @@ export function ConnectionsView() {
 
 function ConnHead({ icon, name, info, sub, children }: { icon: ReactNode; name: string; info: ConnectionInfo; sub?: string; children?: ReactNode }) {
   const app = useApp()
+  const auth = useBrowserAuth()
   const provider = info.provider as OAuthProvider
   const account = info.account ? [info.account.name ?? info.account.login, info.account.team].filter(Boolean).join(' · ') : 'Not connected'
   return (
@@ -88,12 +131,13 @@ function ConnHead({ icon, name, info, sub, children }: { icon: ReactNode; name: 
             </button>
           </>
         ) : (
-          <button className={`btn ${info.status === 'disconnected' ? 'primary' : ''}`} onClick={() => app.run(api.connections.connect(provider))}>
+          <button className={`btn ${info.status === 'disconnected' ? 'primary' : ''}`} onClick={() => auth.start(api.connections.connect(provider))}>
             {info.status === 'reconnect_required' ? <RefreshCw size={13} /> : <ArrowUpRight size={13} />}
             {info.status === 'reconnect_required' ? 'Reconnect' : 'Connect'}
           </button>
         )}
       </div>
+      {auth.pending && <FinishInBrowser onClose={auth.clear} />}
       {children}
     </>
   )

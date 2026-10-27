@@ -3,6 +3,7 @@ import { ArrowUpRight, Check, CircleCheck, CircleDashed, CircleDot, CircleHelp, 
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { Github, INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
+import { FinishInBrowser, useBrowserAuth } from './connections'
 
 const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
 const OAUTH_INPUTS = INPUTS.filter((i) => i.provider !== 'api') as Extract<(typeof INPUTS)[number], { provider: OAuthProvider }>[]
@@ -51,7 +52,8 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
   const { steps, done, canDispatch } = useSetupProgress()
   const current = steps.findIndex((s) => !s)
   const statusOf = (provider: string) => app.connections.find((c) => c.provider === provider)?.status
-  const connect = (p: OAuthProvider) => app.run(api.connections.connect(p))
+  const auth = useBrowserAuth()
+  const connect = (p: OAuthProvider) => auth.start(api.connections.connect(p))
   const stepClass = (i: number) => `step ${steps[i] ? 'complete' : i === current ? 'current' : ''}`
 
   const stepsGrid = (
@@ -92,6 +94,7 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
               )}
             </div>
           ))}
+          {auth.pending && <FinishInBrowser onClose={auth.clear} />}
           <span className="tiny muted row" style={{ gap: 5 }}>
             <Lock size={10} /> Secure OAuth · Revoke access anytime
           </span>
