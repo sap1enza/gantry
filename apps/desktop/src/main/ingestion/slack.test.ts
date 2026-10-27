@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkUnreplied, isMention, permalink, slackEvent, type PendingMention } from './slack'
+import { checkUnreplied, isMention, permalink, scanFollowUps, slackEvent, type PendingMention } from './slack'
 import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
 
 const ME = { id: 'U1', login: 'lucas' }
@@ -87,5 +87,18 @@ describe('checkUnreplied', () => {
     await checkUnreplied(ctx)
     expect(deps.sink.logIgnored.mock.calls[0]![1]).toBe('ignored:filtered')
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('scanFollowUps', () => {
+  it('logs a missing search:read scope as skipped once per hour instead of failing', async () => {
+    const { ctx, deps } = setup()
+    routeFetch([['search.messages', () => res({ ok: false, error: 'missing_scope' })]])
+    await scanFollowUps(ctx)
+    await scanFollowUps(ctx)
+    expect(deps.sink.logConnection.mock.calls.filter(([, s]) => s === 'missing_scope')).toHaveLength(1)
+    deps.kv.set('slack.missingScopeLoggedAt', NOW.getTime() - 3600_000)
+    await scanFollowUps(ctx)
+    expect(deps.sink.logConnection.mock.calls.filter(([, s]) => s === 'missing_scope')).toHaveLength(2)
   })
 })

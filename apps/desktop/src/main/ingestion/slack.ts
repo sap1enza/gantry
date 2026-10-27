@@ -5,6 +5,7 @@ const SOURCE = { kind: 'slack', name: 'Slack' } as const
 const DM_TYPES = new Set(['im', 'mpim'])
 const FOLLOW_UP_WINDOW_MS = 7 * 24 * 3600_000
 const PENDING_GIVE_UP_MS = 24 * 3600_000
+const MISSING_SCOPE_LOG_MS = 3600_000
 const UNREPLIED_INSTRUCTION =
   'You review a Slack conversation for the user marked "ME". Decide whether ME still owes a reply to the message marked "MENTION". decision=true only if a response from ME is still expected.'
 const FOLLOW_UP_INSTRUCTION =
@@ -31,10 +32,19 @@ export interface PendingMention {
 
 const channelNames = new Map<string, string>()
 
+class SlackError extends Error {
+  constructor(
+    method: string,
+    readonly code?: string,
+  ) {
+    super(`Slack ${method}: ${code}`)
+  }
+}
+
 async function slackApi<T>(ctx: Ctx, method: string, params: Record<string, string | number>) {
   const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))
   const body = await ctx.json<{ ok: boolean; error?: string } & T>('slack', `https://slack.com/api/${method}?${query}`)
-  if (!body.ok) throw new Error(`Slack ${method}: ${body.error}`)
+  if (!body.ok) throw new SlackError(method, body.error)
   return body
 }
 
@@ -124,16 +134,26 @@ export async function checkUnreplied(ctx: Ctx) {
   }
 }
 
+function logMissingScope(ctx: Ctx) {
+  if (ctx.now() - (ctx.deps.kv.get<number>('slack.missingScopeLoggedAt') ?? 0) < MISSING_SCOPE_LOG_MS) return
+  ctx.deps.kv.set('slack.missingScopeLoggedAt', ctx.now())
+  ctx.deps.sink.logConnection('slack', 'missing_scope', 'Follow-up scan skipped: reconnect Slack to grant search:read')
+}
+
 export async function scanFollowUps(ctx: Ctx) {
   const me = ctx.account('slack')?.id
   if (!me || !ctx.triggerOn('slack.follow_up')) return
   const since = ctx.now() - FOLLOW_UP_WINDOW_MS
   const after = new Date(since - 24 * 3600_000).toISOString().slice(0, 10)
-  const { messages } = await slackApi<{ messages: { matches: { ts: string; channel: { id: string }; permalink: string }[] } }>(ctx, 'search.messages', {
+  const search = await slackApi<{ messages: { matches: { ts: string; channel: { id: string }; permalink: string }[] } }>(ctx, 'search.messages', {
     query: `from:<@${me}> after:${after}`,
     sort: 'timestamp',
     count: 100,
+  }).catch((e) => {
+    if (!(e instanceof SlackError && e.code === 'missing_scope')) throw e
   })
+  if (!search) return logMissingScope(ctx)
+  const { messages } = search
   const threads = new Map<string, { channel: string; threadTs: string }>()
   for (const match of messages.matches) {
     if (Number(match.ts) * 1000 < since) continue
