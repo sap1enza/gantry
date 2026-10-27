@@ -1,11 +1,10 @@
-import { Hono } from 'hono'
+import { createApp } from './app'
+import type { Env } from './env'
+import { deleteExpired } from './store'
 
-export interface Env {
-  DB: D1Database
-  PUBLIC_URL: string
-}
+export type { Env } from './env'
 
-const app = new Hono<{ Bindings: Env }>()
-app.get('/health', (c) => c.json({ ok: true }))
-
-export default app
+export default {
+  fetch: createApp().fetch,
+  scheduled: async (_controller, env, ctx) => ctx.waitUntil(deleteExpired(env.DB)),
+} satisfies ExportedHandler<Env>

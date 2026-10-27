@@ -1,5 +1,6 @@
 import type {
   ApiTokenInfo,
+  CreateActionableResponse,
   CreatedApiToken,
   DeviceRegistration,
   GrantTokenResponse,
@@ -81,6 +82,9 @@ export class WorkerClient {
   }
   revokeApiToken(id: string) {
     return this.request<void>('DELETE', `/v1/tokens/${id}`)
+  }
+  sendTestActionable() {
+    return this.request<CreateActionableResponse>('POST', '/v1/test-actionable')
   }
   startEmailSignIn(email: string) {
     return this.request<void>('POST', '/auth/email', { email })
