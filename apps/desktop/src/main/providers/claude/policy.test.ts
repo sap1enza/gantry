@@ -22,6 +22,12 @@ describe('decide', () => {
     ['read_only', 'Write', { file_path: 'a.ts' }, 'deny'],
     ['read_only', 'NotebookEdit', {}, 'deny'],
     ['read_only', ...bash('git status && git log -5 | head'), 'allow'],
+    ['read_only', ...bash('rm -rf src'), 'deny'],
+    ['read_only', ...bash('cat $(rm a.ts)'), 'deny'],
+    ['read_only', ...bash('osascript -e x'), 'deny'],
+    ['edit_test', ...bash('git commit --no-verify -m x'), 'deny'],
+    ['edit_test', ...bash('pnpm publish'), 'deny'],
+    ['full', ...bash('npm publish --access public'), 'ask'],
     ['read_only', 'Skill', {}, 'deny'],
     ['read_only', 'Agent', { prompt: 'explore' }, 'allow'],
     ['read_only', 'Glob', { pattern: '~/.ssh/*' }, 'ask'],
@@ -78,7 +84,7 @@ describe('presetOptions', () => {
       })
     expect(await call('1', 'Skill', {})).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
     expect(await call('2', 'Read', { file_path: '/etc/passwd' })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask' } })
-    expect(await call('3', 'Bash', { command: 'pnpm test' })).toEqual({})
+    expect(await call('3', 'Bash', { command: 'ls' })).toEqual({})
     expect([...approvals]).toEqual(['2'])
   })
 })

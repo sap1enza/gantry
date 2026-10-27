@@ -248,7 +248,7 @@ describe('claude provider', () => {
     await vi.waitFor(() => expect(states()).toEqual(['running', 'completed']))
     await expect(provider.pause('card-1')).rejects.toThrow(/No Claude run/)
     await expect(provider.answer('card-1', 'q', 'x')).rejects.toThrow(/No Claude run/)
-    await expect(provider.stop('card-1')).rejects.toThrow(/No Claude run/)
+    await expect(provider.stop('card-1')).resolves.toBeUndefined()
   })
 
   it('detects the claude CLI version or reports why it is missing', async () => {

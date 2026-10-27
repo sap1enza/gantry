@@ -74,15 +74,15 @@ export async function installGuard(request: DispatchRequest, run: Exec = exec): 
   const out = async (...args: string[]) => {
     const { code, output } = await git(run, cwd, ...args)
     if (code) throw new Error(`git ${args.join(' ')} failed: ${output.trim()}`)
-    return output.trim()
+    return output.split('\n')
   }
-  const [gitDir, commonDir] = (await out('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir')).split('\n')
-  if ((await git(run, cwd, 'config', '--get', 'extensions.worktreeConfig')).output.trim() !== 'true') {
+  const [gitDir, commonDir] = await out('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir')
+  if ((await git(run, cwd, 'config', '--get', 'extensions.worktreeConfig')).output.split('\n')[0] !== 'true') {
     await out('config', 'extensions.worktreeConfig', 'true')
   }
   const unsetHooksPath = async () => void (await git(run, cwd, 'config', '--worktree', '--unset', 'core.hooksPath'))
   await unsetHooksPath()
-  const originalHooks = await out('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
+  const originalHooks = (await out('rev-parse', '--path-format=absolute', '--git-path', 'hooks'))[0]!
   const hooksDir = join(gitDir!, 'gantry-hooks')
   rmSync(hooksDir, { recursive: true, force: true })
   mkdirSync(hooksDir, { recursive: true })

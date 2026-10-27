@@ -198,7 +198,8 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
     },
 
     async stop(actionableId) {
-      const run = get(actionableId)
+      const run = runs.get(actionableId)
+      if (!run) return
       runs.delete(actionableId)
       run.halt = 'stopped'
       if (!run.active) return run.sink({ type: 'state', state: 'stopped' })

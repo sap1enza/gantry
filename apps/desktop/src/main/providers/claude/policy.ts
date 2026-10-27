@@ -28,6 +28,10 @@ const PATH_KEYS = ['file_path', 'notebook_path', 'path']
 const WEB_TOOLS = ['WebFetch', 'WebSearch']
 const GH_MUTATION =
   /\bgh\s+(?!pr\s+create\b)(pr|issue|release|repo|gist|workflow|run|secret|variable|label)\s+(create|merge|close|reopen|edit|comment|review|delete|ready|upload|rerun|cancel|set|fork)\b|\bgh\s+api\b.*\s(-X|--method|-f|-F|--field|--raw-field|--input)/
+const READ_ONLY_COMMAND =
+  /^(ls|cat|head|tail|wc|grep|rg|find|pwd|echo|which|file|stat|tree|du|diff|git (status|log|diff|show|blame|rev-parse|ls-files)|gh (pr|issue|run) (view|list|diff|checks))\b/
+const UNSAFE_SHELL = /[`$>]|<\(|-delete\b|-exec\b|-ok\b|-fprint|--pre\b|--output\b|\btree\b.*\s-o\b/
+const PUBLISH = /\b(npm|pnpm|yarn)\s+publish\b|\bgem\s+push\b|\bcargo\s+publish\b/
 const HOOK_BYPASS = /--no-verify\b|\bcore\.hookspath\b|\bextensions\.worktreeconfig\b/i
 const PACKAGE_REGISTRIES = [
   'registry.npmjs.org',
@@ -48,6 +52,14 @@ const allow: Decision = { behavior: 'allow' }
 const ask: Decision = { behavior: 'ask' }
 const deny = (message: string): Decision => ({ behavior: 'deny', message })
 
+export function isReadOnlyCommand(command: string): boolean {
+  if (UNSAFE_SHELL.test(command)) return false
+  return command
+    .split(/&&|\|\||[;|&\n]/)
+    .map((segment) => segment.trim())
+    .every((segment) => !segment || READ_ONLY_COMMAND.test(segment))
+}
+
 export function isOutside(worktreePath: string, toolName: string, input: Record<string, unknown>): boolean {
   const keys = toolName === 'Glob' && /^[~/]/.test(String(input.pattern)) ? [...PATH_KEYS, 'pattern'] : PATH_KEYS
   return keys.some((key) => {
@@ -65,10 +77,14 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
   }
   if (isOutside(worktreePath, toolName, input)) return ask
   if (WEB_TOOLS.includes(toolName)) return preset === 'full' ? allow : ask
-  if (toolName !== 'Bash' || preset !== 'full') return allow
+  if (toolName !== 'Bash') return allow
   const command = String(input.command ?? '')
   if (HOOK_BYPASS.test(command)) return deny('Bypassing git hooks is not allowed.')
-  return GH_MUTATION.test(command) ? ask : allow
+  if (preset === 'read_only') {
+    return isReadOnlyCommand(command) ? allow : deny('Read-only preset: only read-only shell commands are allowed.')
+  }
+  if (preset === 'edit_test') return PUBLISH.test(command) ? deny('Edit + test preset: publishing packages is not allowed.') : allow
+  return GH_MUTATION.test(command) || PUBLISH.test(command) ? ask : allow
 }
 
 export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard: Guard): SandboxSettings {
