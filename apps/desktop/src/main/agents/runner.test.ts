@@ -209,6 +209,46 @@ describe('concurrency', () => {
     expect(s.provider.calls).toEqual([])
     expect(s.board.must(b).tags).not.toContain(TAGS.queued)
   })
+
+  it('stopping a queued resume releases the paused provider run', async () => {
+    const s = setup()
+    s.settings.update({ maxConcurrentAgents: 1 })
+    const a = await started(s, 1)
+    await s.runner.pause(a)
+    await started(s, 2)
+    await s.runner.resume(a)
+    expect(s.board.must(a).agentState).toBe('queued')
+    await s.runner.stop(a)
+    expect(s.provider.calls).toEqual([`pause:${a}`, `stop:${a}`])
+  })
+
+  it('ignores a second start while the first is still preparing', async () => {
+    const s = setup()
+    const id = card(s)
+    await Promise.all([s.runner.start(id), s.runner.start(id)])
+    await flush()
+    expect(s.provider.requests).toHaveLength(1)
+    expect(s.eventTypes(id).filter((t) => t === 'dispatched')).toHaveLength(1)
+    expect(s.board.must(id).agentState).toBe('running')
+  })
+
+  it('does not enqueue a start whose card changed while preparing', async () => {
+    const s = setup()
+    const id = card(s)
+    const starting = s.runner.start(id)
+    await s.board.dismissCard(id, { kind: 'user', name: 'You' })
+    await expect(starting).rejects.toThrow()
+    expect(s.board.must(id).column).toBe('todo')
+  })
+
+  it('builds the dispatch from the card as it is after preparing', async () => {
+    const s = setup()
+    const id = card(s)
+    const starting = s.runner.start(id)
+    s.board.update(id, (a) => (a.title = 'Renamed'))
+    await starting
+    expect(s.board.must(id).dispatch!.instructions).toContain('# Renamed')
+  })
 })
 
 describe('agent events', () => {

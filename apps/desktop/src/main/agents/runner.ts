@@ -86,6 +86,8 @@ export class AgentRunner implements AgentControl {
   private updates = new Map<string, { at: number; text?: string; timer?: ReturnType<typeof setTimeout> }>()
   private dispatches = new Map<string, string>()
   private requested = new Map<string, AgentState>()
+  private starting = new Set<string>()
+  private runs = new Map<string, string>()
 
   constructor(private deps: RunnerDeps) {}
 
@@ -132,16 +134,28 @@ export class AgentRunner implements AgentControl {
   }
 
   async start(id: string, overrides: DispatchOverrides = {}, auto = false) {
+    if (this.starting.has(id)) return
+    assertAction(this.board.must(id), 'start')
+    this.starting.add(id)
+    try {
+      await this.startDispatch(id, overrides, auto)
+    } finally {
+      this.starting.delete(id)
+    }
+  }
+
+  private async startDispatch(id: string, overrides: DispatchOverrides, auto: boolean) {
+    const s = this.deps.settings()
+    const permissionPreset = overrides.permissionPreset ?? s.defaultPermissionPreset
+    if (permissionPreset === 'full' && !(await this.ghAuthenticated())) throw new Error('The Full preset requires `gh auth login`')
+    const context = overrides.instructions === undefined ? await this.deps.fetchContext(this.board.must(id)).catch(() => undefined) : undefined
     const a = this.board.must(id)
     assertAction(a, 'start')
-    const s = this.deps.settings()
     const repos = this.deps.repositories()
     const repo = findRepository(repos, overrides.repository) ?? inferRepository(a, repos)
     if (!repo) throw new Error('Choose a repository before starting')
-    const permissionPreset = overrides.permissionPreset ?? s.defaultPermissionPreset
-    if (permissionPreset === 'full' && !(await this.ghAuthenticated())) throw new Error('The Full preset requires `gh auth login`')
     const provider = this.provider(s.defaultProvider)
-    const instructions = overrides.instructions ?? buildInstructions(a, await this.deps.fetchContext(a).catch(() => undefined))
+    const instructions = overrides.instructions ?? buildInstructions(a, context)
     const reuse = a.dispatch?.repository === repo.remote ? a.dispatch : undefined
     const slug = a.dispatch && !reuse ? `${a.displayId}-${slugify(repo.remote)}-${slugify(a.title)}` : `${a.displayId}-${slugify(a.title)}`
     const dispatch: Dispatch = {
@@ -180,7 +194,7 @@ export class AgentRunner implements AgentControl {
     this.drain()
   }
 
-  private drain() {
+  drain() {
     const cards = this.board.inColumn('in_progress')
     let active = cards.filter(isAgentActive).length
     const queued = cards
@@ -205,6 +219,7 @@ export class AgentRunner implements AgentControl {
       await this.prepareWorktree(a, d)
       const current = this.board.get(id)
       if (current?.dispatch?.id !== d.id || current.agentState !== 'running') return
+      this.runs.set(id, d.provider)
       await this.provider(d.provider).start(
         {
           actionableId: id,
@@ -323,6 +338,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private finishUpdates(id: string) {
+    this.runs.delete(id)
     this.requested.delete(id)
     this.flushUpdate(id)
     this.updates.delete(id)
@@ -402,11 +418,7 @@ export class AgentRunner implements AgentControl {
   async stop(id: string, detail?: string) {
     const a = this.board.must(id)
     assertAction(a, 'stop')
-    if (a.agentState !== 'queued' && a.dispatch)
-      await this.deps.providers
-        .get(a.dispatch.provider)
-        ?.stop(id)
-        .catch((err) => console.error('provider stop failed', err))
+    await this.releaseRun(id)
     this.markStopped(id, detail, USER)
     this.drain()
   }
@@ -468,16 +480,18 @@ export class AgentRunner implements AgentControl {
     this.board.assertMove(a, column)
     if (column === 'done' && a.column !== 'done') await this.done(id)
     else if (a.column === 'done' && column !== 'done') this.board.reopenToTodo(id)
-    else if (a.column === 'in_progress' && column !== 'in_progress') await this.release(a)
+    else if (a.column === 'in_progress' && column !== 'in_progress') await this.releaseRun(id)
     this.board.move(id, column, position)
   }
 
-  private async release(a: Actionable) {
-    if (a.agentState !== 'paused' || !a.dispatch) return
-    await this.deps.providers
-      .get(a.dispatch.provider)
-      ?.stop(a.id)
-      .catch((err) => console.error('provider stop failed', err))
+  private async releaseRun(id: string) {
+    const provider = this.runs.get(id)
+    this.runs.delete(id)
+    if (provider)
+      await this.deps.providers
+        .get(provider)
+        ?.stop(id)
+        .catch((err) => console.error('provider stop failed', err))
   }
 
   private removeWorktree(d: Pick<Dispatch, 'repositoryPath' | 'worktreePath'>, force = false) {

@@ -37,6 +37,7 @@ const MIGRATIONS = [
 
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path)
+  db.function('casefold', { deterministic: true }, (s) => (typeof s === 'string' ? s.toLowerCase() : s))
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA synchronous = NORMAL')
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number }

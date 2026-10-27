@@ -44,6 +44,7 @@ import { findRepository } from './repositories'
 export interface AgentControl {
   start(id: string, overrides?: DispatchOverrides, auto?: boolean): Promise<void>
   stop(id: string): Promise<void>
+  drain(): void
 }
 
 export interface BoardDeps {
@@ -82,6 +83,8 @@ const MAX_ALIASES = 20
 const externalMetadata = (m: Record<string, unknown> = {}) => Object.fromEntries(Object.entries(m).filter(([k]) => !INTERNAL_METADATA.includes(k)))
 const parseRow = (row: unknown) => (row ? (JSON.parse((row as { data: string }).data) as Actionable) : undefined)
 const HAS_TAG = "EXISTS (SELECT 1 FROM json_each(data, '$.tags') WHERE value = ?)"
+const SEARCH =
+  "(instr(casefold(json_extract(data, '$.title')), ?1) OR instr(casefold(json_extract(data, '$.body')), ?1) OR instr(casefold(json_extract(data, '$.source.name')), ?1) OR instr(casefold(display_id), ?1) OR instr(casefold(id), ?1)) ORDER BY json_extract(data, '$.updatedAt') DESC LIMIT 50"
 const SNAPSHOT_BODY_CHARS = 280
 const snapshotCard = (a: Actionable): Actionable => ({
   ...a,
@@ -151,7 +154,7 @@ export class Board implements IngestSink {
   }
 
   all(): Actionable[] {
-    return this.db.prepare('SELECT data FROM actionables').all().map((r) => parseRow(r)!)
+    return this.sql('SELECT data FROM actionables').all().map((r) => parseRow(r)!)
   }
 
   inColumn(column: ColumnId) {
@@ -170,21 +173,19 @@ export class Board implements IngestSink {
 
   resolveTarget(target: string) {
     return parseRow(
-      this.db.prepare('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?').get(target, target.toUpperCase(), dedupeKey('api', target)) ??
-        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target) ??
+      this.sql('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?').get(target, target.toUpperCase(), dedupeKey('api', target)) ??
+        this.sql("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target) ??
         this.byBareExternalId(target),
     )
   }
 
   private byBareExternalId(externalId: string) {
-    const rows = this.db
-      .prepare("SELECT data FROM actionables WHERE dedupe_key LIKE 'api:%' AND substr(dedupe_key, -?) = ? LIMIT 2")
-      .all(externalId.length + 1, `:${externalId}`)
+    const rows = this.sql("SELECT data FROM actionables WHERE dedupe_key LIKE 'api:%' AND substr(dedupe_key, -?) = ? LIMIT 2").all(externalId.length + 1, `:${externalId}`)
     return rows.length === 1 ? rows[0] : undefined
   }
 
   private byKey(kind: SourceKind, externalKey: string) {
-    return parseRow(this.db.prepare('SELECT data FROM actionables WHERE dedupe_key = ?').get(dedupeKey(kind, externalKey)))
+    return parseRow(this.sql('SELECT data FROM actionables WHERE dedupe_key = ?').get(dedupeKey(kind, externalKey)))
   }
 
   private write(a: Actionable) {
@@ -282,6 +283,7 @@ export class Board implements IngestSink {
   private markDoneFields(a: Actionable) {
     a.column = 'done'
     a.doneAt = this.iso()
+    delete a.snoozedUntil
     if (!this.deps.settings().keepCompleted) a.archivedAt = a.doneAt
   }
 
@@ -315,6 +317,7 @@ export class Board implements IngestSink {
     }
 
     const newTrigger = !existing.triggers.includes(signal.trigger)
+    const unsnoozesQueue = existing.column === 'in_progress' && !!existing.snoozedUntil
     if (existing.dismissedAt && !newTrigger) {
       this.log(received('ignored:duplicate'), existing)
       return { outcome: 'ignored:duplicate', actionableId: existing.id }
@@ -338,6 +341,7 @@ export class Board implements IngestSink {
       },
       received('updated'),
     )
+    if (unsnoozesQueue) this.agents?.drain()
     return { outcome: 'updated', actionableId: existing.id }
   }
 
@@ -515,9 +519,11 @@ export class Board implements IngestSink {
       iso,
       archiveBefore,
     )
+    let unsnoozedInProgress = false
     this.updateEach(due, (c) => {
       if (!c.snoozedUntil || c.snoozedUntil > iso) return void (c.archivedAt = iso)
       delete c.snoozedUntil
+      unsnoozedInProgress ||= c.column === 'in_progress'
       if (c.column !== 'in_progress' && c.column !== 'done') {
         c.tags = unique([...c.tags, TAGS.snoozed])
         this.reopenFields(c)
@@ -527,6 +533,7 @@ export class Board implements IngestSink {
     const cutoff = new Date(now - s.activityRetentionDays * DAY_MS).toISOString()
     this.sql('DELETE FROM events WHERE created_at < ?').run(cutoff)
     this.sql('DELETE FROM transcript WHERE at < ?').run(cutoff)
+    if (unsnoozedInProgress) this.agents?.drain()
   }
 
   snapshot(filter: BoardFilter = {}): BoardSnapshot {
@@ -555,23 +562,19 @@ export class Board implements IngestSink {
         running: count('running'),
         paused: count('paused'),
         awaitingInput: count('awaiting_input'),
-        completedToday: (this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE type = 'completed' AND created_at >= ?").get(today) as { n: number }).n,
-        costTodayUsd: (this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS c FROM dispatches WHERE started_at >= ?').get(today) as { c: number }).c,
+        completedToday: (this.sql("SELECT COUNT(*) AS n FROM events WHERE type = 'completed' AND created_at >= ?").get(today) as { n: number }).n,
+        costTodayUsd: (this.sql('SELECT COALESCE(SUM(cost_usd), 0) AS c FROM dispatches WHERE started_at >= ?').get(today) as { c: number }).c,
       },
     }
   }
 
   search(query: string) {
     const q = query.trim().toLowerCase()
-    if (!q) return []
-    return this.all()
-      .filter((a) => [a.title, a.body, a.source.name, a.displayId, a.id].some((f) => f?.toLowerCase().includes(q)))
-      .sort((x, y) => y.updatedAt.localeCompare(x.updatedAt))
-      .slice(0, 50)
+    return q ? this.where(SEARCH, q) : []
   }
 
   columns(): Column[] {
-    return this.db.prepare('SELECT id, name, kind, position FROM columns ORDER BY position').all() as unknown as Column[]
+    return this.sql('SELECT id, name, kind, position FROM columns ORDER BY position').all() as unknown as Column[]
   }
 
   private writeColumnOrder(ids: ColumnId[]) {
@@ -650,10 +653,8 @@ export class Board implements IngestSink {
   }
 
   transcript(actionableId: string): TranscriptEntry[] {
-    const rows = this.sql("SELECT at, event FROM transcript WHERE actionable_id = ? AND json_extract(event, '$.type') != 'raw' ORDER BY rowid").all(actionableId) as { at: string; event: string }[]
-    return rows.map(
-      (r) => ({ at: r.at, event: JSON.parse(r.event) as AgentEvent }),
-    )
+    const rows = this.sql('SELECT at, event FROM transcript WHERE actionable_id = ? ORDER BY rowid').all(actionableId) as { at: string; event: string }[]
+    return rows.map((r) => ({ at: r.at, event: JSON.parse(r.event) as AgentEvent }))
   }
 
   awaitingInputCount() {

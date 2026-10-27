@@ -302,14 +302,55 @@ describe('housekeeping', () => {
   })
 
   it('leaves cards finished while snoozed in Done', () => {
-    const { board, advance } = setup()
+    const { board, advance, eventTypes } = setup()
     const { actionableId: id } = board.ingest(signal())
     board.snooze(id!, '2026-10-27T13:00:00.000Z')
     board.markDone(id!)
+    expect(board.must(id!).snoozedUntil).toBeUndefined()
     advance(HOUR)
     board.housekeeping()
     expect(board.must(id!).column).toBe('done')
     expect(board.must(id!).tags).not.toContain(TAGS.snoozed)
+    expect(eventTypes(id)).not.toContain('unsnoozed')
+  })
+
+  it('clears the snooze when a source resolves a card to Done', () => {
+    const { board } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.snooze(id!, '2026-10-27T13:00:00.000Z')
+    board.resolve({ trigger: 'github.ci_failed', externalKey: signal().externalKey, reason: 'CI passed' })
+    expect(board.must(id!).column).toBe('done')
+    expect(board.must(id!).snoozedUntil).toBeUndefined()
+  })
+
+  it('starts a queued card when its snooze expires and a slot is free', async () => {
+    const { board, runner, settings, advance } = setup()
+    settings.update({ maxConcurrentAgents: 1 })
+    const a = board.ingest(signal({ externalKey: 'k1' })).actionableId!
+    const b = board.ingest(signal({ externalKey: 'k2' })).actionableId!
+    await runner.start(a)
+    await runner.start(b)
+    board.snooze(b, '2026-10-27T13:00:00.000Z')
+    await runner.stop(a)
+    expect(board.must(b).agentState).toBe('queued')
+    advance(HOUR)
+    board.housekeeping()
+    await flush()
+    expect(board.must(b).agentState).toBe('running')
+  })
+
+  it('starts a snoozed queued card when ingest clears its snooze', async () => {
+    const { board, runner, settings } = setup()
+    settings.update({ maxConcurrentAgents: 1 })
+    const a = board.ingest(signal({ externalKey: 'k1' })).actionableId!
+    const b = board.ingest(signal({ externalKey: 'k2' })).actionableId!
+    await runner.start(a)
+    await runner.start(b)
+    board.snooze(b, '2026-10-27T13:00:00.000Z')
+    await runner.stop(a)
+    board.ingest(signal({ externalKey: 'k2' }))
+    await flush()
+    expect(board.must(b).agentState).toBe('running')
   })
 
   it('archives Done cards after archiveDoneAfterDays and prunes old activity', () => {
@@ -338,6 +379,17 @@ describe('queries', () => {
     expect(board.search('github')).toHaveLength(1)
   })
 
+  it('searches literally and case-insensitively beyond ASCII, newest first', () => {
+    const { board, advance } = setup()
+    const plain = board.create({ title: '100 tasks' })
+    advance(1000)
+    const pct = board.create({ title: '100% Ação' })
+    expect(board.search('100%').map((a) => a.id)).toEqual([pct.id])
+    expect(board.search('1_0')).toEqual([])
+    expect(board.search('AÇÃO').map((a) => a.id)).toEqual([pct.id])
+    expect(board.search('100').map((a) => a.id)).toEqual([pct.id, plain.id])
+  })
+
   it('paginates activity with a cursor', () => {
     const { board } = setup()
     for (let i = 0; i < 5; i++) board.create({ title: `Card ${i}` })
@@ -359,10 +411,9 @@ describe('queries', () => {
     expect(board.must(id).dispatch!.instructions).toContain('x'.repeat(500))
   })
 
-  it('does not persist raw agent events and hides raw rows from older databases', () => {
-    const { db, board } = setup()
+  it('does not persist raw agent events', () => {
+    const { board } = setup()
     board.appendTranscript('a', 'd', { type: 'raw', payload: {} })
-    db.prepare('INSERT INTO transcript (dispatch_id, actionable_id, at, event) VALUES (?, ?, ?, ?)').run('d', 'a', 'x', '{"type":"raw","payload":{}}')
     board.appendTranscript('a', 'd', { type: 'message', text: 'hi' })
     expect(board.transcript('a').map((e) => e.event.type)).toEqual(['message'])
   })
