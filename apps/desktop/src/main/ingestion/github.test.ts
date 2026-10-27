@@ -229,6 +229,15 @@ describe('reconcileGithub', () => {
   const alertUrl = (n: number) => `https://github.com/acme/app/security/dependabot/${n}`
   const alert = (n: number) => ({ html_url: alertUrl(n), number: n, security_advisory: { severity: 'high', summary: `vuln ${n}` } })
 
+  it('polls no repository when none is selected', async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = []
+    const fetch = routeFetch([['/graphql', emptySearch]])
+    await reconcileGithub(ctx)
+    expect(fetch.mock.calls.map(([url]) => String(url)).filter((u) => !u.endsWith('/graphql'))).toEqual([])
+    expect(deps.sink.ingest).not.toHaveBeenCalled()
+  })
+
   it('keeps dependabot alerts active when fetching them fails', async () => {
     const { ctx, deps } = setup()
     deps.settings.github.repositories = ['acme/app']

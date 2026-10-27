@@ -374,12 +374,10 @@ export async function reconcileGithub(ctx: Ctx) {
   ])
   const current = currentFromSearch(ctx, { authored, review, issues }, prev)
   if (assignedOnly) ctx.deps.kv.delete('github.issuesSince')
-  let repos: Promise<string[]> | undefined
-  // shortcut: lists every accessible repo per reconcile when none are selected, cache the list if users hit rate limits
-  const repoNames = () => (repos ??= settings.github.repositories.length ? Promise.resolve(settings.github.repositories) : githubRepositories(ctx).then((rs) => rs.map((r) => r.fullName)))
+  const repos = settings.github.repositories
   const [alerts, repoIssues] = await Promise.all([
-    ctx.triggerOn('github.dependabot') ? recheck(async () => openAlerts(ctx, settings, await repoNames())) : undefined,
-    !assignedOnly && ctx.triggerOn('github.issue') ? recheck(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? [])) : undefined,
+    ctx.triggerOn('github.dependabot') ? recheck(() => openAlerts(ctx, settings, repos)) : undefined,
+    !assignedOnly && ctx.triggerOn('github.issue') ? recheck(() => openIssues(ctx, repos, prev['github.issue'] ?? [])) : undefined,
   ])
   current['github.dependabot'] = alerts
   if (!assignedOnly) current['github.issue'] = repoIssues
