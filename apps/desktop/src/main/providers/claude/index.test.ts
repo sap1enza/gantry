@@ -1,6 +1,7 @@
-import type { Options, PermissionResult, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { HookCallback, HookInput, Options, PermissionResult, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentEvent, DispatchRequest, PermissionPreset } from '@gantry/shared'
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -64,8 +65,15 @@ function setup(script: (turn: Turn) => AsyncGenerator<SDKMessage>, preset: Permi
   return { provider, events, turns, exec, guard, release, start, states, question }
 }
 
-const ask = (turn: Turn, tool: string, input: Record<string, unknown>) =>
-  turn.options.canUseTool!(tool, input, { signal: new AbortController().signal } as never) as Promise<PermissionResult>
+async function ask(turn: Turn, tool: string, input: Record<string, unknown>): Promise<PermissionResult> {
+  const toolUseID = randomUUID()
+  const signal = new AbortController().signal
+  const hook = turn.options.hooks!.PreToolUse![0]!.hooks[0] as HookCallback
+  const hookInput = { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: toolUseID } as HookInput
+  const output = (await hook(hookInput, toolUseID, { signal })) as { hookSpecificOutput?: { permissionDecision: string; permissionDecisionReason: string } }
+  if (output.hookSpecificOutput?.permissionDecision === 'deny') return { behavior: 'deny', message: output.hookSpecificOutput.permissionDecisionReason }
+  return turn.options.canUseTool!(tool, input, { signal, toolUseID } as never) as Promise<PermissionResult>
+}
 
 describe('claude provider', () => {
   it('runs a turn to completion and reports the parsed result', async () => {
@@ -163,9 +171,9 @@ describe('claude provider', () => {
   it('denies preset violations without asking', async () => {
     let decision: PermissionResult | undefined
     const { start, events } = setup(async function* (turn) {
-      decision = await ask(turn, 'Bash', { command: 'git push' })
+      decision = await ask(turn, 'Edit', { file_path: 'a.ts' })
       yield result('success')
-    })
+    }, 'read_only')
     await start()
     await vi.waitFor(() => expect(decision?.behavior).toBe('deny'))
     expect(events.some((event) => event.type === 'question')).toBe(false)
@@ -224,11 +232,13 @@ describe('claude provider', () => {
     })
     await start()
     await provider.pause('card-1')
+    await expect(provider.pause('card-1')).rejects.toThrow(/not running/)
+    await expect(provider.answer('card-1', 'q', 'x')).rejects.toThrow(/No pending question q/)
     await provider.stop('card-1')
     expect(states()).toEqual(['running', 'paused', 'stopped'])
   })
 
-  it('rejects calls on unknown ids, idle runs and unknown questions', async () => {
+  it('rejects calls on unknown ids and forgets finished runs', async () => {
     const { provider, start, states } = setup(async function* () {
       yield result('success')
     })
@@ -236,8 +246,9 @@ describe('claude provider', () => {
     await expect(provider.answer('nope', 'q', 'x')).rejects.toThrow(/No Claude run/)
     await start()
     await vi.waitFor(() => expect(states()).toEqual(['running', 'completed']))
-    await expect(provider.pause('card-1')).rejects.toThrow(/not running/)
-    await expect(provider.answer('card-1', 'q', 'x')).rejects.toThrow(/No pending question q/)
+    await expect(provider.pause('card-1')).rejects.toThrow(/No Claude run/)
+    await expect(provider.answer('card-1', 'q', 'x')).rejects.toThrow(/No Claude run/)
+    await expect(provider.stop('card-1')).resolves.toBeUndefined()
   })
 
   it('detects the claude CLI version or reports why it is missing', async () => {

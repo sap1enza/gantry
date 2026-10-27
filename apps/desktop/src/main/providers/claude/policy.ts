@@ -2,6 +2,7 @@ import type { HookCallbackMatcher, Options, PermissionResult, SandboxSettings } 
 import type { PermissionPreset } from '@gantry/shared'
 import { homedir } from 'node:os'
 import { isAbsolute, relative, resolve } from 'node:path'
+import { expandHome } from '../../system/exec'
 import type { Guard } from './guard'
 
 export type Decision = PermissionResult | { behavior: 'ask' }
@@ -25,13 +26,13 @@ const READ_ONLY_TOOLS = [
 ]
 const PATH_KEYS = ['file_path', 'notebook_path', 'path']
 const WEB_TOOLS = ['WebFetch', 'WebSearch']
+const GH_MUTATION =
+  /\bgh\s+(?!pr\s+create\b)(pr|issue|release|repo|gist|workflow|run|secret|variable|label)\s+(create|merge|close|reopen|edit|comment|review|delete|ready|upload|rerun|cancel|set|fork)\b|\bgh\s+api\b.*\s(-X|--method|-f|-F|--field|--raw-field|--input)/
 const READ_ONLY_COMMAND =
   /^(ls|cat|head|tail|wc|grep|rg|find|pwd|echo|which|file|stat|tree|du|diff|git (status|log|diff|show|blame|rev-parse|ls-files)|gh (pr|issue|run) (view|list|diff|checks))\b/
 const UNSAFE_SHELL = /[`$>]|<\(|-delete\b|-exec\b|-ok\b|-fprint|--pre\b|--output\b|\btree\b.*\s-o\b/
-const REMOTE_MUTATION =
-  /\bgit\b[^;&|\n]*\spush\b|\bgh\s+(pr|issue|release|repo|gist|workflow|run|secret|variable|label)\s+(create|merge|close|reopen|edit|comment|review|delete|ready|upload|rerun|cancel|set|fork)\b|\bgh\s+api\b.*\s(-X|--method|-f|-F|--field|--raw-field|--input)|\b(npm|pnpm|yarn)\s+publish\b/
+const PUBLISH = /\b(npm|pnpm|yarn)\s+publish\b|\bgem\s+push\b|\bcargo\s+publish\b/
 const HOOK_BYPASS = /--no-verify\b|\bcore\.hookspath\b|\bextensions\.worktreeconfig\b/i
-const FULL_ALLOWED = /\bgit\b[^;&|\n]*\spush\b|\bgh\s+pr\s+create\b/g
 const PACKAGE_REGISTRIES = [
   'registry.npmjs.org',
   'registry.yarnpkg.com',
@@ -63,7 +64,7 @@ export function isOutside(worktreePath: string, toolName: string, input: Record<
   const keys = toolName === 'Glob' && /^[~/]/.test(String(input.pattern)) ? [...PATH_KEYS, 'pattern'] : PATH_KEYS
   return keys.some((key) => {
     if (typeof input[key] !== 'string') return false
-    const path = resolve(worktreePath, (input[key] as string).replace(/^~(?=$|\/)/, homedir()))
+    const path = resolve(worktreePath, expandHome(input[key] as string, homedir()))
     const inside = relative(worktreePath, path)
     return inside.startsWith('..') || isAbsolute(inside)
   })
@@ -82,12 +83,8 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
   if (preset === 'read_only') {
     return isReadOnlyCommand(command) ? allow : deny('Read-only preset: only read-only shell commands are allowed.')
   }
-  if (preset === 'edit_test') {
-    return REMOTE_MUTATION.test(command)
-      ? deny('Edit + test preset: pushing, opening PRs and other remote changes are not allowed. Leave changes local.')
-      : allow
-  }
-  return REMOTE_MUTATION.test(command.replace(FULL_ALLOWED, '')) ? ask : allow
+  if (preset === 'edit_test') return PUBLISH.test(command) ? deny('Edit + test preset: publishing packages is not allowed.') : allow
+  return GH_MUTATION.test(command) || PUBLISH.test(command) ? ask : allow
 }
 
 export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard: Guard): SandboxSettings {
@@ -113,6 +110,7 @@ export function presetOptions(
   preset: PermissionPreset,
   worktreePath: string,
   guard: Guard,
+  approvals: Set<string>,
 ): Pick<Options, 'permissionMode' | 'disallowedTools' | 'hooks' | 'sandbox'> {
   const guardHook: HookCallbackMatcher = {
     hooks: [
@@ -120,6 +118,7 @@ export function presetOptions(
         if (input.hook_event_name !== 'PreToolUse') return {}
         const decision = decide(preset, worktreePath, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>)
         if (decision.behavior === 'allow') return {}
+        if (decision.behavior === 'ask') approvals.add(input.tool_use_id)
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
