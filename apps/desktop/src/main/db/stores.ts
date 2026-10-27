@@ -68,7 +68,7 @@ export function createSettingsStore(db: Db) {
     return settings as unknown as Settings
   }
   return {
-    get: (): Settings => (cached ??= load()),
+    get: (): Settings => structuredClone((cached ??= load())),
     update(patch: Partial<Settings>): Settings {
       const current = this.get() as unknown as Record<string, unknown>
       const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
