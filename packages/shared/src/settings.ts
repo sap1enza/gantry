@@ -51,7 +51,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  workerUrl: 'http://localhost:8787',
+  workerUrl: 'https://gantry-api.sapienzalucas.workers.dev',
   defaultProvider: 'claude',
   workspaceLocation: '~/Developer/Gantry',
   defaultPermissionPreset: 'edit_test',
