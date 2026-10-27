@@ -202,7 +202,6 @@ function main() {
     else createWindow()
     api.account
       .completeAuth(code)
-      .then(() => ingestion.syncNow())
       .catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
   })
 

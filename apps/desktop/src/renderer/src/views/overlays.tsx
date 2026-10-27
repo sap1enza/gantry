@@ -1,11 +1,10 @@
 import { PERMISSION_PRESETS, PRIORITIES, type Actionable, type Link, type PermissionPreset, type Priority, type Repository } from '@gantry/shared'
-import { Mail, Plus, Search, X } from 'lucide-react'
+import { Plus, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { SNOOZE_PRESETS, snoozeUntil } from '../lib/snooze'
-import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
-import { useBrowserAuth } from './connections'
+import { Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
 import { stateLabel } from './details'
 
 export function SearchPalette() {
@@ -233,68 +232,5 @@ export function DispatchSheet() {
         })}
       </fieldset>
     </Modal>
-  )
-}
-
-export function NameModal() {
-  const app = useApp()
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [askEmail, setAskEmail] = useState(false)
-  const signedIn = app.account?.signedIn
-  const auth = useBrowserAuth()
-  const signIn = async (method: 'github' | 'email') => {
-    if ((await auth.start(api.account.setName(name.trim()).then(() => api.account.signIn(method, method === 'email' ? email : undefined)))) && method === 'email') app.toast(`Magic link sent to ${email}`)
-  }
-  const save = async () => {
-    await app.run(api.account.setName(name.trim()))
-    await app.reloadAccount()
-  }
-  return (
-    <div className="overlay">
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Welcome to Gantry">
-        <div className="modal-head">
-          <h2>Welcome to Gantry</h2>
-          <p>Tell us what to call you. Signing in is optional and enables multi-device later.</p>
-        </div>
-        <div className="modal-body">
-          <label className="form-label">
-            Your name
-            <input className="field" autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && name.trim() && save()} />
-          </label>
-          <div className="row">
-            <span className="small muted">Optional</span>
-            <div className="divider grow" />
-          </div>
-          {signedIn ? (
-            <Tag tone="green">Signed in{app.account?.githubLogin ? ` as ${app.account.githubLogin}` : app.account?.email ? ` as ${app.account.email}` : ''}</Tag>
-          ) : (
-            <div className="row wrap">
-              <button className="btn" onClick={() => signIn('github')}>
-                <Github size={13} /> Sign in with GitHub
-              </button>
-              {askEmail ? (
-                <>
-                  <input className="field grow" type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-                  <button className="btn" disabled={!/^\S+@\S+\.\S+$/.test(email)} onClick={() => signIn('email')}>
-                    Send link
-                  </button>
-                </>
-              ) : (
-                <button className="btn" onClick={() => setAskEmail(true)}>
-                  <Mail size={13} /> Sign in with email
-                </button>
-              )}
-            </div>
-          )}
-          {auth.banner}
-        </div>
-        <div className="modal-foot">
-          <button className="btn primary" disabled={!name.trim()} onClick={save}>
-            Continue
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }

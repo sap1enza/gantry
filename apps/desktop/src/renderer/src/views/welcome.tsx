@@ -19,33 +19,6 @@ function useSetupProgress() {
   return { steps, done: steps.filter(Boolean).length, canDispatch }
 }
 
-export function WelcomeBanner() {
-  const app = useApp()
-  const { done } = useSetupProgress()
-  return (
-    <div className="banner" style={{ margin: '12px 16px 0' }}>
-      <CircleHelp size={15} />
-      <div className="grow">
-        <b>Finish setting up Gantry</b>
-        {done} of 3 steps complete
-      </div>
-      <button className="btn sm" onClick={() => app.setShowWelcome(true)}>
-        Show steps
-      </button>
-      <button
-        className="icon-btn"
-        aria-label="Hide setup"
-        onClick={async () => {
-          await app.run(api.account.completeOnboarding())
-          await app.reloadAccount()
-        }}
-      >
-        <X size={13} />
-      </button>
-    </div>
-  )
-}
-
 export function Welcome({ embedded }: { embedded?: boolean }) {
   const app = useApp()
   const { steps, done, canDispatch } = useSetupProgress()

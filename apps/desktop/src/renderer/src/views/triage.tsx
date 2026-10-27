@@ -5,7 +5,7 @@ import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
 import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover } from '../ui'
 import { DetailsPanel } from './details'
-import { Welcome, WelcomeBanner } from './welcome'
+import { Welcome } from './welcome'
 
 const FIELD_LABELS: [keyof CardFieldVisibility, string][] = [
   ['source', 'Source'],
@@ -91,7 +91,7 @@ export function TriageView() {
         )}
       </div>
 
-      {app.showWelcome ? <Welcome embedded /> : app.account && !app.account.onboarded && <WelcomeBanner />}
+      {app.showWelcome && <Welcome embedded />}
 
       <div className="triage">
         <div className="board-wrap">

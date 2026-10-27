@@ -118,7 +118,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       revokeApiToken: (id) => worker().revokeApiToken(id),
       async sendTestActionable() {
         await worker().sendTestActionable()
-        await ingestion.syncNow().catch(() => undefined)
+        void ingestion.syncNow().catch(() => undefined)
       },
       endpoint: async () => new URL('/v1/actionables', settings.get().workerUrl).toString(),
     },
@@ -164,6 +164,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       async completeAuth(code) {
         await account.completeAuth(code)
         deps.push({ type: 'connections.changed' })
+        void ingestion.syncNow().catch(() => undefined)
       },
       signOut: async () => account.signOut(),
       completeOnboarding: async () => account.completeOnboarding(),

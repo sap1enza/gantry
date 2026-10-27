@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { useApp, type View } from './app'
 import { ActivityView } from './views/activity'
 import { ConnectionsView } from './views/connections'
-import { DispatchSheet, NameModal, NewActionableModal, SearchPalette, SnoozeMenu } from './views/overlays'
+import { DispatchSheet, NewActionableModal, SearchPalette, SnoozeMenu } from './views/overlays'
+import { Onboarding } from './views/onboarding'
 import { PreferencesView } from './views/preferences'
 import { TriageView } from './views/triage'
 import { initials, INPUTS, SOURCE_LABELS, SourceIcon } from './ui'
@@ -20,6 +21,8 @@ export function Shell() {
   const [sidebar, setSidebar] = useState(true)
   const stats = app.snapshot?.stats
   const welcome = app.view === 'triage' && app.snapshot && (app.snapshot.stats.total === 0 || app.showWelcome)
+
+  if (app.account && !app.account.onboarded) return <Onboarding />
 
   return (
     <div className={`app ${sidebar ? '' : 'no-sidebar'}`}>
@@ -99,7 +102,6 @@ export function Shell() {
       {app.newOpen && <NewActionableModal />}
       {app.snoozeFor && <SnoozeMenu />}
       {app.dispatchFor && <DispatchSheet />}
-      {app.account && !app.account.name && <NameModal />}
     </div>
   )
 }
