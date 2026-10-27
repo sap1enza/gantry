@@ -53,6 +53,11 @@ export function createSecretStore(db: Db, cipher: Cipher): SecretStore {
   }
 }
 
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value === 'object' && value !== null) Object.values(Object.freeze(value)).forEach(deepFreeze)
+  return value
+}
+
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 export function createSettingsStore(db: Db) {
@@ -68,7 +73,7 @@ export function createSettingsStore(db: Db) {
     return settings as unknown as Settings
   }
   return {
-    get: (): Settings => structuredClone((cached ??= load())),
+    get: (): Settings => (cached ??= deepFreeze(load())),
     update(patch: Partial<Settings>): Settings {
       const current = this.get() as unknown as Record<string, unknown>
       const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')

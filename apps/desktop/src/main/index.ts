@@ -209,10 +209,10 @@ function main() {
   const syncAccount = () => void account.ensureDevice().then((ok) => (ok ? account.refresh() : undefined))
   syncAccount()
   setInterval(syncAccount, MINUTE_MS)
+  runner.recover()
   board.housekeeping()
   setInterval(() => board.housekeeping(), MINUTE_MS)
   applySettings(settings.get())
-  runner.recover()
   ingestion.start()
   app.on('before-quit', () => ingestion.stop())
 
