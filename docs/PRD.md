@@ -63,7 +63,7 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 1. External systems hit the Worker (webhooks, API POSTs) → stored in the user's inbox (D1).
 2. Desktop app polls `GET /v1/inbox` every 15 s, acks delivered items.
 3. Inbox items pass through **trigger evaluation** (per-source toggles, filters, optional LLM gate) → create/update actionable or log as ignored.
-4. Reconciliation poller (5–10 min, rate-limit-aware) backfills missed events and resolves external state.
+4. Reconciliation poller backfills missed events and resolves external state (cadence in section 8).
 5. User dispatches → agent provider creates worktree, runs agent, streams events → timeline + Activity.
 
 All user data lives in local SQLite. Worker stores only: user record, OAuth grants, API tokens, undelivered inbox items.
@@ -160,10 +160,11 @@ Actionable {
 **Provider interface** (`packages/shared`): `dispatch(actionable, opts)`, `pause(id)`, `resume(id, feedback?)`, `stop(id)`, `answer(id, text)`, `events(id): AsyncIterable<AgentEvent>`, `openInTerminal(id)`.
 
 **Claude provider (v1)**
-- Detects `claude` on PATH; Welcome step 3 blocks until found.
+- Requires `claude` on PATH (checked in first run, section 12).
 - Runs headless via Claude Agent SDK with streaming JSON. Session id stored for resume.
 - Worktree: `git worktree add <workspaceLocation>/<id>-<slug> -b gantry/<id>-<slug>` from the registered repo's default branch. Dispatch reuses the card's recorded worktree and branch if they exist (e.g. after Stop); a new one is created only when none is recorded.
 - Pause = interrupt, keep session + worktree. Resume = continue session. Stop = kill, keep worktree, card → To-do tagged `Stopped`.
+- Cleanup (on Done or Delete all data) removes only worktrees Gantry created, via `git worktree remove` on the recorded `worktreePath`. Remote branches and PRs are always kept.
 - Awaiting input = agent asked a question (AskUserQuestion / permission prompt); user answers in the details panel.
 - Open in terminal: `claude --resume <sessionId>` in the worktree via Terminal.app (or Orca if detected).
 - Completion: prompt instructs a final structured block (summary, files changed, branch, PR URL, tests run, open questions). Parsed into `result`; links auto-added. Failure → Review tagged `Failed` with error.
@@ -188,7 +189,7 @@ Actionable {
 
 ## 8. Integrations
 
-All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. One grant per provider in v1 (one GitHub account, one Slack workspace, one Gmail account); grants are keyed by provider so more can be added later. GitHub user tokens expire after 8 h and Google after 1 h; the app refreshes via the Worker's refresh route. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
+All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. One grant per provider in v1 (one GitHub account, one Slack workspace, one Gmail account); grants are keyed by provider so more can be added later. Token refresh: section 13. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
 
 **Delivery**: webhooks → Worker → inbox (primary). Reconciliation polling every 5–10 min backfills and resolves state. Each poller tracks rate-limit headers and backs off before the limit (GitHub `x-ratelimit-remaining`, Slack `Retry-After`, Gmail quota units).
 
@@ -214,10 +215,10 @@ Settings: channel allow/deny list, "check unreplied after N minutes" (default 30
 | Unreplied mentions (LLM) | mentions re-checked after N min; LLM decides a reply is still owed |
 | Conversations needing follow-up (LLM) | threads/DMs where I posted in last 7 days; LLM finds commitments with a remaining next step |
 
-Delivery: Slack Events API with user-token scopes delivers `message.channels`, `message.groups`, `message.im` for conversations the user belongs to, so no bot needs to join channels. Mentions are detected by scanning message text for the user's id. Cards include the original message text so the user can verify before dispatching. No automatic resolution: cards move only by manual action (Done, Dismiss, drag).
+Delivery: Slack Events API with user-token scopes delivers `message.channels`, `message.groups`, `message.im` for conversations the user belongs to, so no bot needs to join channels. Mentions are detected by scanning message text for the user's id. Cards include the original message text so the user can verify before dispatching.
 
 ### 8.3 Email (Gmail)
-Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories (Promotions/Social/Updates/Forums), from-domain allow/deny, label filter. Optional **LLM "needs action" gate**. Polling only (no Pub/Sub). No automatic resolution: cards move only by manual action (Done, Dismiss, drag). Expired OAuth → "Reconnect required" state; existing cards kept; connection event logged.
+Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories (Promotions/Social/Updates/Forums), from-domain allow/deny, label filter. Optional **LLM "needs action" gate**. Polling only (no Pub/Sub). Expired OAuth → "Reconnect required" state; existing cards kept; connection event logged.
 
 ### 8.4 API & custom sources
 `POST https://<worker>/v1/actionables` with `Authorization: Bearer <token>`. Tokens created in Connections (`Create API token`), stored in Worker, shown once.
@@ -263,7 +264,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Agent defaults**: default provider/model, workspace location, registered repositories, default permission preset, confirm before dispatching, confirm before stopping, max concurrent agents.
 
-**When work is done**: agent workspace — Delete / Keep / Ask each time. Delete runs `git worktree remove` on the card's recorded `worktreePath` only; remote branches and PRs are always kept. Keep completed actionables (on → auto-archive from Done after N days, default 7, searchable; off → removed from board on Done, still in Activity).
+**When work is done**: agent workspace — Delete / Keep / Ask each time (cleanup rule in section 7). Keep completed actionables (on → auto-archive from Done after N days, default 7, searchable; off → removed from board on Done, still in Activity).
 
 **Snooze presets**: 1 h, 3 h, tomorrow 9 am, next Monday, custom.
 
@@ -277,7 +278,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Account**: name, sign-in status, device id, sign out.
 
-**Local data**: Delete all Gantry data — stops agents, removes only the worktrees Gantry created (paths recorded in `dispatch.worktreePath`, via `git worktree remove`), wipes SQLite and Keychain, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
+**Local data**: Delete all Gantry data — stops agents, removes Gantry worktrees (section 7 cleanup rule), wipes SQLite and Keychain, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
 
 ---
 
@@ -297,7 +298,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 - Webhook signature verification (GitHub HMAC, Slack signing secret).
 - Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
-- OAuth access tokens are returned to the app on connect and stored in Keychain; Worker keeps refresh tokens only where polling must survive app restarts (GitHub App installation token minting, Google refresh). Webhook routing uses the grant → user mapping.
+- OAuth: access tokens go to the app's Keychain on connect; Worker keeps refresh tokens. GitHub user tokens expire after 8 h, Google after 1 h; the app calls the refresh route on 401 or before expiry. Webhook routing uses the grant → user mapping.
 
 ---
 
@@ -305,7 +306,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 - All local data in SQLite under `~/Library/Application Support/Gantry/`; tokens in Keychain.
 - Board renders ≤ 500 visible cards without jank; Activity paginates ("Load earlier events").
-- Inbox poll 15 s; reconciliation 5–10 min; both back off on rate-limit headers and surface a `connection` event when throttled.
+- Pollers surface a `connection` event when throttled.
 - App closed: Worker queues; nothing is lost for 30 days.
 - Dev distribution: `pnpm package` produces an unsigned `.app`/DMG. No auto-update.
 
