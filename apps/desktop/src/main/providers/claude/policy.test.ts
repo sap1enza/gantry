@@ -55,6 +55,23 @@ describe('decide', () => {
     ['full', ...bash('gh pr merge 3'), 'ask'],
     ['full', ...bash('git push && gh release create v1'), 'ask'],
     ['full', 'Write', { file_path: 'a.ts' }, 'allow'],
+    ['full', ...bash('gh pr list --state open && gh run view 5 --log'), 'allow'],
+    ['full', ...bash('gh api repos/o/r/pulls --paginate'), 'allow'],
+    ['full', ...bash('gh search prs --author @me'), 'allow'],
+    ['full', ...bash('gh repo archive o/r --yes'), 'ask'],
+    ['full', ...bash('gh repo rename x'), 'ask'],
+    ['full', ...bash('gh repo sync --force'), 'ask'],
+    ['full', ...bash('gh issue transfer 3 o/other'), 'ask'],
+    ['full', ...bash('gh pr lock 3'), 'ask'],
+    ['full', ...bash('gh auth token'), 'ask'],
+    ['full', ...bash('gh api --method DELETE repos/o/r'), 'ask'],
+    ['full', ...bash('gh api graphql -F query=@q.graphql'), 'ask'],
+    ['full', ...bash('gh pr create --head other-branch'), 'ask'],
+    ['full', ...bash('gh pr view 3 --json url | xargs gh pr merge'), 'ask'],
+    ['full', ...bash('gh pr view $(gh auth token)'), 'ask'],
+    ['full', ...bash('cd x && gh secret set TOKEN'), 'ask'],
+    ['full', ...bash('git checkout gh-pages'), 'allow'],
+    ['full', ...bash('(gh repo delete o/r --yes)'), 'ask'],
   ])('%s %s %j → %s', (preset, tool, input, behavior) => {
     expect(decide(preset, WT, tool, input).behavior).toBe(behavior)
   })
