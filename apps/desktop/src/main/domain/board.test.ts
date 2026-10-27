@@ -137,6 +137,18 @@ describe('api actionables', () => {
   })
 })
 
+describe('source disconnect', () => {
+  it('tags open cards from that source once and leaves other sources alone', () => {
+    const { board } = setup()
+    const { actionableId: gh } = board.ingest(signal())
+    const { actionableId: api } = board.ingest(apiSignal())
+    board.markSourceDisconnected('github')
+    board.markSourceDisconnected('github')
+    expect(board.must(gh!).tags.filter((t) => t === TAGS.sourceDisconnected)).toHaveLength(1)
+    expect(board.must(api!).tags).not.toContain(TAGS.sourceDisconnected)
+  })
+})
+
 describe('guarded user transitions', () => {
   it('rejects drags into agent-driven columns and unknown columns', () => {
     const { board } = setup()

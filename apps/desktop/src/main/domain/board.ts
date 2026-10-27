@@ -352,6 +352,15 @@ export class Board implements IngestSink {
     this.log({ type: 'connection', title: `${provider}: ${status.replaceAll('_', ' ')}`, detail, source: provider, actor: { kind: 'source', name: provider } })
   }
 
+  markSourceDisconnected(kind: SourceKind) {
+    for (const card of this.all()) {
+      if (card.source.kind !== kind || card.dismissedAt || card.archivedAt || card.tags.includes(TAGS.sourceDisconnected)) continue
+      this.update(card.id, (a) => {
+        a.tags = unique([...a.tags, TAGS.sourceDisconnected])
+      })
+    }
+  }
+
   create(input: ManualActionableInput) {
     const title = input.title.trim()
     if (!title) throw new Error('Title is required')

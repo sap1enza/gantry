@@ -97,3 +97,5 @@ export interface MeResponse {
   signedIn: boolean
   grants: { provider: OAuthProvider; account: GrantAccount; status: 'connected' | 'reconnect_required' }[]
 }
+
+export type AuthCompletion = { kind: 'signin' } | { kind: 'grant'; provider: OAuthProvider }

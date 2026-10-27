@@ -1,4 +1,4 @@
-import type { ActionableSource, Link, Priority } from './actionable'
+import type { ActionableSource, Link, Priority, SourceKind } from './actionable'
 import type { ReceivedOutcome } from './events'
 import type { TriggerId } from './triggers'
 
@@ -47,4 +47,5 @@ export interface IngestSink {
   applyPatch(idOrExternal: string, patch: ActionablePatch): void
   dismiss(idOrExternal: string): void
   logConnection(provider: string, status: string, detail?: string): void
+  markSourceDisconnected(kind: SourceKind): void
 }

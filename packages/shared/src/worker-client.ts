@@ -1,5 +1,6 @@
 import type {
   ApiTokenInfo,
+  AuthCompletion,
   CreateActionableResponse,
   CreatedApiToken,
   DeviceRegistration,
@@ -68,8 +69,11 @@ export class WorkerClient {
   ack(ids: string[]) {
     return this.request<void>('POST', '/v1/inbox/ack', { ids })
   }
-  refreshGrant(provider: OAuthProvider) {
-    return this.request<GrantTokenResponse>('POST', `/v1/grants/${provider}/refresh`)
+  refreshGrant(provider: OAuthProvider, options: { force?: boolean } = {}) {
+    return this.request<GrantTokenResponse>('POST', `/v1/grants/${provider}/refresh${options.force ? '?force=1' : ''}`)
+  }
+  completeAuth(code: string) {
+    return this.request<AuthCompletion>('POST', '/auth/complete', { code })
   }
   revokeGrant(provider: OAuthProvider) {
     return this.request<void>('DELETE', `/v1/grants/${provider}`)
