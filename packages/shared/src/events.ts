@@ -27,6 +27,7 @@ export const RECEIVED_OUTCOMES = [
   'ignored:filtered',
   'ignored:duplicate',
   'ignored:llm',
+  'ignored:error',
 ] as const
 export type ReceivedOutcome = (typeof RECEIVED_OUTCOMES)[number]
 

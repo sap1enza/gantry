@@ -251,7 +251,7 @@ export function createCtx(deps: IngestionDeps) {
         return false
       }
       report(e)
-      deps.sink.logIgnored(describe, 'ignored:filtered', `Failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${errorMessage(e)}`)
+      deps.sink.logIgnored(describe, 'ignored:error', `Failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${errorMessage(e)}`)
       saveRetries({ ...retries(), [key]: { attempts: MAX_ATTEMPTS, retryAt: now() } })
       return true
     }

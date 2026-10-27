@@ -37,7 +37,7 @@ describe('pollInbox', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await pollInbox(createCtx(deps))
     expect(worker.ack).toHaveBeenCalledWith(['1', '2', '3'])
-    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 1 attempt: db locked')
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:error', 'Failed after 1 attempt: db locked')
   })
 
   it('backs off a transiently failing item without blocking the ones behind it', async () => {
@@ -75,7 +75,7 @@ describe('pollInbox', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await pollInbox(createCtx(deps))
     expect(worker.ack).toHaveBeenCalledWith(['2', '3'])
-    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 5 attempts: unavailable')
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:error', 'Failed after 5 attempts: unavailable')
   })
 
   it('remembers a given-up key for a day so a recurring failure is not re-logged every pass', async () => {
@@ -121,7 +121,7 @@ describe('pollInbox', () => {
     deps.kv.set('ingestion.retries', { 'inbox:gh': { attempts: 4, retryAt: NOW.getTime() } })
     await pollInbox(ctx)
     expect(worker.ack).toHaveBeenCalledWith(['gh'])
-    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'GitHub check_suite webhook' }), 'ignored:filtered', 'Failed after 5 attempts: github reconnect required')
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'GitHub check_suite webhook' }), 'ignored:error', 'Failed after 5 attempts: github reconnect required')
   })
 
   it('handles a redelivered item only once', async () => {
