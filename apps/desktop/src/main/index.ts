@@ -26,7 +26,7 @@ import { notificationFor } from './system/notifications'
 
 const MINUTE_MS = 60_000
 
-app.setPath('userData', join(app.getPath('appData'), 'Gantry'))
+app.setPath('userData', process.env.GANTRY_USER_DATA ?? join(app.getPath('appData'), 'Gantry'))
 
 let window: BrowserWindow | undefined
 const linkFromArgv = (argv: string[]) => parseDeepLink(argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? '')

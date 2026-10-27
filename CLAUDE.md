@@ -12,6 +12,7 @@ macOS triage board that turns GitHub/Slack/Gmail/API signals into actionables an
 - `pnpm install` (once per worktree)
 - `pnpm -r typecheck`, `pnpm -r test`, `pnpm --filter @gantry/desktop build`
 - `pnpm dev` (desktop), `pnpm dev:worker` (wrangler dev on :8787)
+- Dev/e2e runs must set `GANTRY_USER_DATA=<scratch dir>`; never delete `~/Library/Application Support/Gantry`
 
 ## Contracts (coordinator-owned; do not edit without asking)
 - `packages/shared/src/*` — domain types, `GantryApi` IPC contract, `IngestSink`, `AgentProvider`, worker API schemas, `WorkerClient`.
