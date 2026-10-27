@@ -33,6 +33,7 @@ const MIGRATIONS = [
   CREATE INDEX actionables_snoozed ON actionables (snoozed_until);
   CREATE INDEX actionables_agent_state ON actionables (agent_state);
   `,
+  `DELETE FROM transcript WHERE json_extract(event, '$.type') = 'raw';`,
 ]
 
 export function openDb(path: string): Db {
