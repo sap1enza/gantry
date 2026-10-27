@@ -3,24 +3,23 @@ import { decrypt, encrypt } from './crypto'
 import type { Env } from './env'
 import type { ExchangeResult, TokenSet } from './oauth'
 
-export const INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000
-export const RATE_LIMIT_PER_MINUTE = 60
+const INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const RATE_LIMIT_PER_MINUTE = 60
 
-const now = () => new Date().toISOString()
+export const now = () => new Date().toISOString()
 
-export function enqueueStatements(db: D1Database, userIds: string[], payload: InboxPayload) {
+export async function enqueue(db: D1Database, userIds: string[], payload: InboxPayload) {
+  if (!userIds.length) return
   const receivedAt = new Date()
   const expiresAt = new Date(receivedAt.getTime() + INBOX_TTL_MS).toISOString()
   const json = JSON.stringify(payload)
-  return userIds.map((userId) =>
-    db
-      .prepare('INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(crypto.randomUUID(), userId, json, receivedAt.toISOString(), expiresAt),
+  await db.batch(
+    userIds.map((userId) =>
+      db
+        .prepare('INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(crypto.randomUUID(), userId, json, receivedAt.toISOString(), expiresAt),
+    ),
   )
-}
-
-export async function enqueue(db: D1Database, userIds: string[], payload: InboxPayload) {
-  if (userIds.length) await db.batch(enqueueStatements(db, userIds, payload))
 }
 
 export async function hitRateLimit(db: D1Database, key: string, limit = RATE_LIMIT_PER_MINUTE) {
@@ -116,16 +115,13 @@ export async function decryptGrant(env: Env, row: GrantRow) {
 
 const USER_TABLES = ['devices', 'api_tokens', 'inbox', 'oauth_states', 'email_links', 'grants']
 
-export const deleteUserStatements = (db: D1Database, userId: string) => [
-  ...USER_TABLES.map((table) => db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(userId)),
-  db.prepare('DELETE FROM users WHERE id = ?').bind(userId),
-]
+export const deleteUser = (db: D1Database, userId: string) => db.prepare('DELETE FROM users WHERE id = ?').bind(userId)
 
 export async function mergeUsers(db: D1Database, fromUserId: string, intoUserId: string) {
   if (fromUserId === intoUserId) return
   await db.batch([
     ...USER_TABLES.map((table) => db.prepare(`UPDATE OR IGNORE ${table} SET user_id = ?1 WHERE user_id = ?2`).bind(intoUserId, fromUserId)),
-    ...deleteUserStatements(db, fromUserId),
+    deleteUser(db, fromUserId),
   ])
 }
 

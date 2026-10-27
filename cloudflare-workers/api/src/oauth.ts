@@ -1,8 +1,9 @@
 import type { GrantAccount, OAuthProvider } from '@gantry/shared'
 import type { Env } from './env'
 
+export const GRANT_PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 export type OAuthStartProvider = OAuthProvider | 'github_signin'
-export const OAUTH_PROVIDERS: OAuthStartProvider[] = ['github', 'slack', 'google', 'github_signin']
+export const OAUTH_PROVIDERS: OAuthStartProvider[] = [...GRANT_PROVIDERS, 'github_signin']
 
 export interface TokenSet {
   accessToken: string
@@ -16,48 +17,55 @@ export interface ExchangeResult extends TokenSet {
   routingKeys: string[]
 }
 
-const SLACK_USER_SCOPES = 'channels:history,groups:history,im:history,mpim:history,users:read'
-const GOOGLE_SCOPES = 'openid email profile https://www.googleapis.com/auth/gmail.readonly'
 const GITHUB_HEADERS = { accept: 'application/vnd.github+json', 'user-agent': 'gantry-worker' }
 
+const providerConfig = (env: Env, provider: OAuthProvider) =>
+  ({
+    github: {
+      authorizeUrl: 'https://github.com/login/oauth/authorize',
+      tokenUrl: 'https://github.com/login/oauth/access_token',
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
+      authorizeParams: {},
+    },
+    slack: {
+      authorizeUrl: 'https://slack.com/oauth/v2/authorize',
+      tokenUrl: 'https://slack.com/api/oauth.v2.access',
+      clientId: env.SLACK_CLIENT_ID,
+      clientSecret: env.SLACK_CLIENT_SECRET,
+      authorizeParams: { user_scope: 'channels:history,groups:history,im:history,mpim:history,users:read' },
+    },
+    google: {
+      authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      clientId: env.GOOGLE_CLIENT_ID,
+      clientSecret: env.GOOGLE_CLIENT_SECRET,
+      authorizeParams: {
+        response_type: 'code',
+        scope: 'openid email profile https://www.googleapis.com/auth/gmail.readonly',
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
+  })[provider]
+
+const tokenProvider = (provider: OAuthStartProvider): OAuthProvider => (provider === 'github_signin' ? 'github' : provider)
 const redirectUri = (env: Env, provider: OAuthStartProvider) => `${env.PUBLIC_URL}/oauth/${provider}/callback`
 
 export function authorizeUrl(env: Env, provider: OAuthStartProvider, state: string) {
-  const url =
-    provider === 'slack'
-      ? new URL('https://slack.com/oauth/v2/authorize')
-      : provider === 'google'
-        ? new URL('https://accounts.google.com/o/oauth2/v2/auth')
-        : new URL('https://github.com/login/oauth/authorize')
-  const params: Record<string, string> =
-    provider === 'slack'
-      ? { client_id: env.SLACK_CLIENT_ID, user_scope: SLACK_USER_SCOPES }
-      : provider === 'google'
-        ? { client_id: env.GOOGLE_CLIENT_ID, response_type: 'code', scope: GOOGLE_SCOPES, access_type: 'offline', prompt: 'consent' }
-        : { client_id: env.GITHUB_CLIENT_ID }
-  for (const [k, v] of Object.entries({ ...params, redirect_uri: redirectUri(env, provider), state })) url.searchParams.set(k, v)
+  const config = providerConfig(env, tokenProvider(provider))
+  const url = new URL(config.authorizeUrl)
+  for (const [k, v] of Object.entries({ ...config.authorizeParams, client_id: config.clientId, redirect_uri: redirectUri(env, provider), state }))
+    url.searchParams.set(k, v)
   return url.toString()
 }
 
-const tokenEndpoint = (provider: OAuthProvider) =>
-  provider === 'slack'
-    ? 'https://slack.com/api/oauth.v2.access'
-    : provider === 'google'
-      ? 'https://oauth2.googleapis.com/token'
-      : 'https://github.com/login/oauth/access_token'
-
-const clientCredentials = (env: Env, provider: OAuthProvider) =>
-  provider === 'slack'
-    ? { client_id: env.SLACK_CLIENT_ID, client_secret: env.SLACK_CLIENT_SECRET }
-    : provider === 'google'
-      ? { client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET }
-      : { client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET }
-
 async function requestTokens(fetchImpl: typeof fetch, env: Env, provider: OAuthProvider, params: Record<string, string>) {
-  const res = await fetchImpl(tokenEndpoint(provider), {
+  const { tokenUrl, clientId, clientSecret } = providerConfig(env, provider)
+  const res = await fetchImpl(tokenUrl, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ ...clientCredentials(env, provider), ...params }),
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...params }),
   })
   const data = (await res.json().catch(() => ({}))) as Record<string, any>
   const t = provider === 'slack' && data.authed_user?.access_token ? data.authed_user : data
@@ -79,7 +87,7 @@ async function getJson(fetchImpl: typeof fetch, url: string, token: string, head
   return (await res.json()) as Record<string, any>
 }
 
-export async function githubIdentity(fetchImpl: typeof fetch, accessToken: string) {
+async function githubIdentity(fetchImpl: typeof fetch, accessToken: string) {
   const user = await getJson(fetchImpl, 'https://api.github.com/user', accessToken, GITHUB_HEADERS)
   return { id: String(user.id), login: user.login, name: user.name ?? undefined, avatarUrl: user.avatar_url } satisfies GrantAccount
 }
@@ -90,8 +98,7 @@ async function githubInstallationKeys(fetchImpl: typeof fetch, accessToken: stri
 }
 
 export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: OAuthStartProvider, code: string): Promise<ExchangeResult> {
-  const tokenProvider = provider === 'github_signin' ? 'github' : provider
-  const { tokens, data } = await requestTokens(fetchImpl, env, tokenProvider, {
+  const { tokens, data } = await requestTokens(fetchImpl, env, tokenProvider(provider), {
     code,
     redirect_uri: redirectUri(env, provider),
     ...(provider === 'google' ? { grant_type: 'authorization_code' } : {}),

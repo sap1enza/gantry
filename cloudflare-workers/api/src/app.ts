@@ -14,24 +14,26 @@ import {
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { createMiddleware } from 'hono/factory'
+import { validator } from 'hono/validator'
 import { z } from 'zod'
 import { hmacSha256Hex, randomToken, sha256, timingSafeEqual } from './crypto'
 import type { AppEnv } from './env'
-import { authorizeUrl, exchangeCode, OAUTH_PROVIDERS, refreshTokens, revokeGrant, type OAuthStartProvider } from './oauth'
+import { authorizeUrl, exchangeCode, GRANT_PROVIDERS, OAUTH_PROVIDERS, refreshTokens, revokeGrant, type OAuthStartProvider } from './oauth'
 import {
   addRoutingKey,
   decryptGrant,
-  deleteUserStatements,
+  deleteUser,
   enqueue,
   findUsersByRoutingKey,
   getGrant,
   hitRateLimit,
   mergeUsers,
+  now,
+  type GrantRow,
   saveGrant,
   updateGrantTokens,
 } from './store'
 
-const GRANT_PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const EMAIL_LINK_TTL_MS = 15 * 60 * 1000
 const REFRESH_SKEW_MS = 5 * 60 * 1000
@@ -61,11 +63,11 @@ const page = (c: Ctx, message: string, status: 200 | 400 | 502 = 200) =>
     status,
   )
 
-async function parseJson<T extends z.ZodType>(c: Ctx, schema: T): Promise<z.infer<T> | Response> {
-  const raw = await c.req.json().catch(() => undefined)
-  const parsed = schema.safeParse(raw)
-  return parsed.success ? parsed.data : c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400)
-}
+const json = <T extends z.ZodType>(schema: T) =>
+  validator('json', (value, c) => {
+    const parsed = schema.safeParse(value)
+    return parsed.success ? (parsed.data as z.infer<T>) : c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400)
+  })
 
 const toTokenInfo = (r: Record<string, string | null>): ApiTokenInfo => ({
   id: r.id!,
@@ -86,7 +88,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const match = /^Device ([^:\s]+):(\S+)$/.exec(c.req.header('authorization') ?? '')
     const device =
       match && (await c.env.DB.prepare('SELECT id, user_id, secret_hash FROM devices WHERE id = ?').bind(match[1]).first<Record<string, string>>())
-    if (!match || !device || !timingSafeEqual(await sha256(match[2]!), device.secret_hash!)) return c.json({ error: 'unauthorized' }, 401)
+    if (!match || !device || !(await timingSafeEqual(await sha256(match[2]!), device.secret_hash!))) return c.json({ error: 'unauthorized' }, 401)
     const retryAfter = await hitRateLimit(c.env.DB, `device:${device.id}`)
     if (retryAfter) return tooMany(c, retryAfter)
     c.set('userId', device.user_id!)
@@ -104,7 +106,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     if (!token || token.revoked_at) return c.json({ error: 'unauthorized' }, 401)
     const retryAfter = await hitRateLimit(c.env.DB, `token:${token.id}`)
     if (retryAfter) return tooMany(c, retryAfter)
-    await c.env.DB.prepare('UPDATE api_tokens SET last_used_at = ? WHERE id = ?').bind(new Date().toISOString(), token.id).run()
+    await c.env.DB.prepare('UPDATE api_tokens SET last_used_at = ? WHERE id = ?').bind(now(), token.id).run()
     c.set('userId', token.user_id!)
     c.set('tokenName', token.name!)
     await next()
@@ -112,76 +114,86 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
 
   async function me(c: Ctx): Promise<MeResponse> {
     const userId = c.get('userId')
-    const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<Record<string, string | null>>()
-    const { results } = await c.env.DB.prepare('SELECT provider, account, status FROM grants WHERE user_id = ?').bind(userId).all<Record<string, string>>()
+    const [users, grants] = await c.env.DB.batch<Record<string, string | null>>([
+      c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId),
+      c.env.DB.prepare('SELECT provider, account, status FROM grants WHERE user_id = ?').bind(userId),
+    ])
+    const user = users!.results[0]
     return {
       userId,
       name: user!.name!,
       email: user!.email ?? undefined,
       githubLogin: user!.github_login ?? undefined,
       signedIn: Boolean(user!.email || user!.github_id),
-      grants: results.map((g) => ({
-        provider: g.provider as OAuthProvider,
-        account: JSON.parse(g.account!) as GrantAccount,
-        status: g.status as 'connected' | 'reconnect_required',
-      })),
+      grants: (grants!.results as unknown as GrantRow[]).map((g) => ({ provider: g.provider, account: JSON.parse(g.account) as GrantAccount, status: g.status })),
     }
   }
 
-  async function enqueueActionable(c: Ctx, payload: InboxPayload) {
-    await enqueue(c.env.DB, [c.get('userId')], payload)
+  async function createActionable(c: Ctx, tokenName: string, request: CreateActionableRequest) {
+    const id = crypto.randomUUID()
+    await enqueue(c.env.DB, [c.get('userId')], { kind: 'actionable.create', id, tokenName, request })
+    return c.json({ id, url: `gantry://actionable/${id}` }, 201)
   }
 
-  app.post('/v1/devices', async (c) => {
-    const retryAfter = await hitRateLimit(c.env.DB, `ip:${c.req.header('cf-connecting-ip') ?? 'unknown'}`)
-    if (retryAfter) return tooMany(c, retryAfter)
-    const body = await parseJson(c, nameSchema)
-    if (body instanceof Response) return body
-    const userId = crypto.randomUUID()
-    const deviceId = crypto.randomUUID()
-    const deviceSecret = randomToken()
-    const createdAt = new Date().toISOString()
-    await c.env.DB.batch([
-      c.env.DB.prepare('INSERT INTO users (id, name, created_at) VALUES (?, ?, ?)').bind(userId, body.name, createdAt),
-      c.env.DB.prepare('INSERT INTO devices (id, user_id, secret_hash, created_at) VALUES (?, ?, ?, ?)').bind(deviceId, userId, await sha256(deviceSecret), createdAt),
-    ])
-    return c.json({ deviceId, deviceSecret, userId } satisfies DeviceRegistration, 201)
-  })
+  const findGrant = (c: Ctx) => {
+    const provider = c.req.param('provider') as OAuthProvider
+    return GRANT_PROVIDERS.includes(provider) ? getGrant(c.env.DB, c.get('userId'), provider) : null
+  }
+
+  app.post(
+    '/v1/devices',
+    createMiddleware<AppEnv>(async (c, next) => {
+      const retryAfter = await hitRateLimit(c.env.DB, `ip:${c.req.header('cf-connecting-ip') ?? 'unknown'}`)
+      if (retryAfter) return tooMany(c, retryAfter)
+      await next()
+    }),
+    json(nameSchema),
+    async (c) => {
+      const userId = crypto.randomUUID()
+      const deviceId = crypto.randomUUID()
+      const deviceSecret = randomToken()
+      const createdAt = now()
+      await c.env.DB.batch([
+        c.env.DB.prepare('INSERT INTO users (id, name, created_at) VALUES (?, ?, ?)').bind(userId, c.req.valid('json').name, createdAt),
+        c.env.DB.prepare('INSERT INTO devices (id, user_id, secret_hash, created_at) VALUES (?, ?, ?, ?)').bind(deviceId, userId, await sha256(deviceSecret), createdAt),
+      ])
+      return c.json({ deviceId, deviceSecret, userId } satisfies DeviceRegistration, 201)
+    },
+  )
 
   app.get('/v1/me', deviceAuth, async (c) => c.json(await me(c)))
 
-  app.patch('/v1/me', deviceAuth, async (c) => {
-    const body = await parseJson(c, nameSchema.partial())
-    if (body instanceof Response) return body
+  app.patch('/v1/me', deviceAuth, json(nameSchema.partial()), async (c) => {
+    const body = c.req.valid('json')
     if (body.name) await c.env.DB.prepare('UPDATE users SET name = ? WHERE id = ?').bind(body.name, c.get('userId')).run()
     return c.json(await me(c))
   })
 
   app.delete('/v1/me', deviceAuth, async (c) => {
     const userId = c.get('userId')
-    const { results } = await c.env.DB.prepare('SELECT * FROM grants WHERE user_id = ?').bind(userId).all<Parameters<typeof decryptGrant>[1]>()
+    const { results } = await c.env.DB.prepare('SELECT * FROM grants WHERE user_id = ?').bind(userId).all<GrantRow>()
     await Promise.allSettled(
       results.map(async (row) => {
         const grant = await decryptGrant(c.env, row)
         await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken, grant.refreshToken)
       }),
     )
-    await c.env.DB.batch(deleteUserStatements(c.env.DB, userId))
+    await deleteUser(c.env.DB, userId).run()
     return c.body(null, 204)
   })
 
   app.get('/v1/inbox', deviceAuth, async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query('limit')) || 100, 1), 500)
     const { results } = await c.env.DB.prepare('SELECT id, payload, received_at FROM inbox WHERE user_id = ? AND expires_at > ? ORDER BY received_at LIMIT ?')
-      .bind(c.get('userId'), new Date().toISOString(), limit)
+      .bind(c.get('userId'), now(), limit)
       .all<Record<string, string>>()
     return c.json({ items: results.map((r) => ({ id: r.id!, receivedAt: r.received_at!, payload: JSON.parse(r.payload!) as InboxPayload })) })
   })
 
-  app.post('/v1/inbox/ack', deviceAuth, async (c) => {
-    const body = await parseJson(c, ackSchema)
-    if (body instanceof Response) return body
-    await c.env.DB.prepare('DELETE FROM inbox WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))').bind(c.get('userId'), JSON.stringify(body.ids)).run()
+  app.post('/v1/inbox/ack', deviceAuth, json(ackSchema), async (c) => {
+    await c.env.DB.prepare('DELETE FROM inbox WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))')
+      .bind(c.get('userId'), JSON.stringify(c.req.valid('json').ids))
+      .run()
     return c.body(null, 204)
   })
 
@@ -190,16 +202,14 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     return c.json(results.map(toTokenInfo))
   })
 
-  app.post('/v1/tokens', deviceAuth, async (c) => {
-    const body = await parseJson(c, nameSchema)
-    if (body instanceof Response) return body
+  app.post('/v1/tokens', deviceAuth, json(nameSchema), async (c) => {
     const token = `gtry_${randomToken()}`
     const row = {
       id: crypto.randomUUID(),
-      name: body.name,
+      name: c.req.valid('json').name,
       prefix: 'gtry_',
       last_four: token.slice(-4),
-      created_at: new Date().toISOString(),
+      created_at: now(),
       last_used_at: null,
       revoked_at: null,
     }
@@ -211,34 +221,22 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
 
   app.delete('/v1/tokens/:id', deviceAuth, async (c) => {
     const { meta } = await c.env.DB.prepare('UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
-      .bind(new Date().toISOString(), c.req.param('id'), c.get('userId'))
+      .bind(now(), c.req.param('id'), c.get('userId'))
       .run()
     return meta.changes ? c.body(null, 204) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.post('/v1/test-actionable', deviceAuth, async (c) => {
-    const id = crypto.randomUUID()
-    await enqueueActionable(c, { kind: 'actionable.create', id, tokenName: 'Test', request: SAMPLE_ACTIONABLE })
-    return c.json({ id, url: `gantry://actionable/${id}` }, 201)
-  })
+  app.post('/v1/test-actionable', deviceAuth, (c) => createActionable(c, 'Test', SAMPLE_ACTIONABLE))
 
-  app.post('/v1/actionables', tokenAuth, async (c) => {
-    const request = await parseJson(c, createActionableSchema)
-    if (request instanceof Response) return request
-    const id = crypto.randomUUID()
-    await enqueueActionable(c, { kind: 'actionable.create', id, tokenName: c.get('tokenName')!, request })
-    return c.json({ id, url: `gantry://actionable/${id}` }, 201)
-  })
+  app.post('/v1/actionables', tokenAuth, json(createActionableSchema), (c) => createActionable(c, c.get('tokenName')!, c.req.valid('json')))
 
-  app.patch('/v1/actionables/:id', tokenAuth, async (c) => {
-    const patch = await parseJson(c, patchActionableSchema)
-    if (patch instanceof Response) return patch
-    await enqueueActionable(c, { kind: 'actionable.update', target: c.req.param('id'), patch })
+  app.patch('/v1/actionables/:id', tokenAuth, json(patchActionableSchema), async (c) => {
+    await enqueue(c.env.DB, [c.get('userId')], { kind: 'actionable.update', target: c.req.param('id'), patch: c.req.valid('json') })
     return c.body(null, 202)
   })
 
   app.post('/v1/actionables/:id/dismiss', tokenAuth, async (c) => {
-    await enqueueActionable(c, { kind: 'actionable.dismiss', target: c.req.param('id') })
+    await enqueue(c.env.DB, [c.get('userId')], { kind: 'actionable.dismiss', target: c.req.param('id') })
     return c.body(null, 202)
   })
 
@@ -258,7 +256,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const stored = await c.env.DB.prepare('DELETE FROM oauth_states WHERE state = ? RETURNING user_id, provider, expires_at')
       .bind(c.req.query('state') ?? '')
       .first<Record<string, string>>()
-    if (!stored || stored.provider !== provider || stored.expires_at! < new Date().toISOString()) return page(c, 'This link has expired. Try connecting again from Gantry.', 400)
+    if (!stored || stored.provider !== provider || stored.expires_at! < now()) return page(c, 'This link has expired. Try connecting again from Gantry.', 400)
     if (!code) return page(c, 'Connection cancelled. You can close this tab.', 400)
     const userId = stored.user_id!
     let result
@@ -280,10 +278,9 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   })
 
   app.post('/v1/grants/:provider/refresh', deviceAuth, async (c) => {
-    const provider = c.req.param('provider') as OAuthProvider
-    const userId = c.get('userId')
-    const row = GRANT_PROVIDERS.includes(provider) ? await getGrant(c.env.DB, userId, provider) : null
+    const row = await findGrant(c)
     if (!row) return c.json({ error: 'not_found' }, 404)
+    const { provider, user_id: userId } = row
     if (row.status !== 'connected') return c.json({ error: 'reconnect_required' }, 409)
     const grant = await decryptGrant(c.env, row)
     let accessToken = grant.accessToken
@@ -306,20 +303,18 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   })
 
   app.delete('/v1/grants/:provider', deviceAuth, async (c) => {
-    const provider = c.req.param('provider') as OAuthProvider
-    const row = GRANT_PROVIDERS.includes(provider) ? await getGrant(c.env.DB, c.get('userId'), provider) : null
+    const row = await findGrant(c)
     if (!row) return c.body(null, 204)
     const grant = await decryptGrant(c.env, row)
-    await revokeGrant(fetchImpl, c.env, provider, grant.accessToken, grant.refreshToken).catch(console.error)
-    await c.env.DB.prepare('DELETE FROM grants WHERE user_id = ? AND provider = ?').bind(c.get('userId'), provider).run()
+    await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken, grant.refreshToken).catch(console.error)
+    await c.env.DB.prepare('DELETE FROM grants WHERE user_id = ? AND provider = ?').bind(row.user_id, row.provider).run()
     return c.body(null, 204)
   })
 
-  app.post('/auth/email', deviceAuth, async (c) => {
+  app.post('/auth/email', deviceAuth, json(emailSchema), async (c) => {
     const retryAfter = await hitRateLimit(c.env.DB, `email:${c.get('deviceId')}`, EMAIL_SENDS_PER_MINUTE)
     if (retryAfter) return tooMany(c, retryAfter)
-    const body = await parseJson(c, emailSchema)
-    if (body instanceof Response) return body
+    const body = c.req.valid('json')
     const token = randomToken()
     await c.env.DB.prepare('INSERT INTO email_links (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)')
       .bind(await sha256(token), c.get('userId'), body.email.toLowerCase(), new Date(Date.now() + EMAIL_LINK_TTL_MS).toISOString())
@@ -347,7 +342,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const link = await c.env.DB.prepare('DELETE FROM email_links WHERE token_hash = ? RETURNING user_id, email, expires_at')
       .bind(await sha256(c.req.query('token') ?? ''))
       .first<Record<string, string>>()
-    if (!link || link.expires_at! < new Date().toISOString()) return page(c, 'This link has expired. Request a new one from Gantry.', 400)
+    if (!link || link.expires_at! < now()) return page(c, 'This link has expired. Request a new one from Gantry.', 400)
     const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(link.email).first<{ id: string }>()
     if (existing) await mergeUsers(c.env.DB, link.user_id!, existing.id)
     else await c.env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(link.email, link.user_id).run()
@@ -357,7 +352,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   app.post('/webhooks/github', async (c) => {
     const raw = await c.req.text()
     const expected = `sha256=${await hmacSha256Hex(c.env.GITHUB_WEBHOOK_SECRET, raw)}`
-    if (!timingSafeEqual(c.req.header('x-hub-signature-256') ?? '', expected)) return c.json({ error: 'bad_signature' }, 401)
+    if (!(await timingSafeEqual(c.req.header('x-hub-signature-256') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
     const payload = JSON.parse(raw) as { action?: string; installation?: { id: number }; sender?: { id: number } }
     const event = c.req.header('x-github-event') ?? 'unknown'
     const installationKey = payload.installation && `installation:${payload.installation.id}`
@@ -375,7 +370,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const timestamp = Number(c.req.header('x-slack-request-timestamp'))
     if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > SLACK_REPLAY_WINDOW_S) return c.json({ error: 'stale_request' }, 401)
     const expected = `v0=${await hmacSha256Hex(c.env.SLACK_SIGNING_SECRET, `v0:${timestamp}:${raw}`)}`
-    if (!timingSafeEqual(c.req.header('x-slack-signature') ?? '', expected)) return c.json({ error: 'bad_signature' }, 401)
+    if (!(await timingSafeEqual(c.req.header('x-slack-signature') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
     const payload = JSON.parse(raw) as { type?: string; challenge?: string; authorizations?: { team_id: string; user_id: string }[] }
     if (payload.type === 'url_verification') return c.json({ challenge: payload.challenge })
     // shortcut: Slack only includes one authorization per event, call apps.event.authorizations.list when several Gantry users share a channel
