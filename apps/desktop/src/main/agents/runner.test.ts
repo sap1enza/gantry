@@ -275,6 +275,7 @@ describe('lifecycle', () => {
     await s.runner.resume(id, 'go on')
     expect(s.board.must(id).agentState).toBe('running')
     expect(s.provider.calls).toEqual([`pause:${id}`, `resume:${id}:go on`])
+    expect(s.board.events({ types: ['paused', 'resumed'] }).events.map((e) => `${e.type}:${e.actor.kind}`)).toEqual(['resumed:user', 'paused:user'])
   })
 
   it('reopen resumes the same session with feedback', async () => {

@@ -21,9 +21,11 @@ export class FakeProvider implements AgentProvider {
   }
   async pause(id: string) {
     this.calls.push(`pause:${id}`)
+    this.sinks.get(id)?.({ type: 'state', state: 'paused' })
   }
   async resume(id: string, feedback?: string) {
     this.calls.push(`resume:${id}:${feedback ?? ''}`)
+    this.sinks.get(id)?.({ type: 'state', state: 'running' })
   }
   async stop(id: string) {
     this.calls.push(`stop:${id}`)

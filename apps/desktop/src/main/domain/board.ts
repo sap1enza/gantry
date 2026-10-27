@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { SQLInputValue } from 'node:sqlite'
+import type { SQLInputValue, StatementSync } from 'node:sqlite'
 import {
   actionsFor,
   canMove,
@@ -81,6 +81,13 @@ const INTERNAL_METADATA = ['aliasIds', 'autoStartOnRepository']
 const MAX_ALIASES = 20
 const externalMetadata = (m: Record<string, unknown> = {}) => Object.fromEntries(Object.entries(m).filter(([k]) => !INTERNAL_METADATA.includes(k)))
 const parseRow = (row: unknown) => (row ? (JSON.parse((row as { data: string }).data) as Actionable) : undefined)
+const HAS_TAG = "EXISTS (SELECT 1 FROM json_each(data, '$.tags') WHERE value = ?)"
+const SNAPSHOT_BODY_CHARS = 280
+const snapshotCard = (a: Actionable): Actionable => ({
+  ...a,
+  body: a.body?.slice(0, SNAPSHOT_BODY_CHARS),
+  dispatch: a.dispatch && { ...a.dispatch, instructions: '' },
+})
 
 export function assertAction(a: Actionable, action: CardAction) {
   if (!actionsFor(a).includes(action)) throw new Error(`${a.displayId} cannot ${action.replace('_', ' ')} from ${a.column}`)
@@ -98,8 +105,32 @@ type NewCard = Omit<Actionable, 'id' | 'displayId' | 'column' | 'position' | 'cr
 
 export class Board implements IngestSink {
   agents?: AgentControl
+  private statements = new Map<string, StatementSync>()
 
   constructor(private deps: BoardDeps) {}
+
+  private sql(query: string) {
+    let statement = this.statements.get(query)
+    if (!statement) this.statements.set(query, (statement = this.db.prepare(query)))
+    return statement
+  }
+
+  private where(clause: string, ...args: SQLInputValue[]) {
+    return this.sql(`SELECT data FROM actionables WHERE ${clause}`)
+      .all(...args)
+      .map((r) => parseRow(r)!)
+  }
+
+  private transaction(fn: () => void) {
+    this.db.exec('BEGIN')
+    try {
+      fn()
+      this.db.exec('COMMIT')
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
+  }
 
   private get db() {
     return this.deps.db
@@ -123,8 +154,12 @@ export class Board implements IngestSink {
     return this.db.prepare('SELECT data FROM actionables').all().map((r) => parseRow(r)!)
   }
 
+  inColumn(column: ColumnId) {
+    return this.where('board_column = ?', column)
+  }
+
   get(id: string) {
-    return parseRow(this.db.prepare('SELECT data FROM actionables WHERE id = ?').get(id))
+    return parseRow(this.sql('SELECT data FROM actionables WHERE id = ?').get(id))
   }
 
   must(id: string) {
@@ -153,41 +188,54 @@ export class Board implements IngestSink {
   }
 
   private write(a: Actionable) {
-    this.db
-      .prepare(
-        'INSERT INTO actionables (id, display_id, dedupe_key, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data',
-      )
-      .run(a.id, a.displayId, a.externalKey ? dedupeKey(a.source.kind, a.externalKey) : null, JSON.stringify(a))
+    this.sql('INSERT INTO actionables (id, display_id, dedupe_key, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data').run(a.id, a.displayId, a.externalKey ? dedupeKey(a.source.kind, a.externalKey) : null, JSON.stringify(a))
     if (a.dispatch)
-      this.db
-        .prepare(
-          'INSERT INTO dispatches (id, actionable_id, started_at, cost_usd, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET cost_usd = excluded.cost_usd, data = excluded.data',
-        )
-        .run(a.dispatch.id, a.id, a.dispatch.startedAt, a.dispatch.costUsd, JSON.stringify(a.dispatch))
+      this.sql(
+        'INSERT INTO dispatches (id, actionable_id, started_at, cost_usd, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET cost_usd = excluded.cost_usd, data = excluded.data',
+      ).run(a.dispatch.id, a.id, a.dispatch.startedAt, a.dispatch.costUsd, JSON.stringify(a.dispatch))
   }
 
   private top(column: ColumnId) {
-    const row = this.db
-      .prepare("SELECT MIN(json_extract(data, '$.position')) AS p FROM actionables WHERE json_extract(data, '$.column') = ?")
-      .get(column) as { p: number | null }
+    const row = this.sql("SELECT MIN(json_extract(data, '$.position')) AS p FROM actionables WHERE board_column = ?").get(column) as { p: number | null }
     return (row.p ?? 1) - 1
   }
 
-  save(a: Actionable, event?: EventInput) {
+  private persist(a: Actionable, event?: EventInput) {
     a.updatedAt = this.iso()
     if (event?.actor.kind === 'user') a.tags = without(a.tags, TAGS.snoozed)
     this.write(a)
+  }
+
+  save(a: Actionable, event?: EventInput) {
+    this.persist(a, event)
     this.deps.push({ type: 'board.changed' })
     if (event) this.log(event, a)
     return a
   }
 
+  private change<T>(a: Actionable, mutate: (a: Actionable) => T) {
+    const column = a.column
+    const result = mutate(a)
+    if (a.column !== column) a.position = this.top(a.column)
+    return result
+  }
+
   update(id: string, mutate: (a: Actionable) => void, event?: EventInput) {
     const a = this.must(id)
-    const column = a.column
-    mutate(a)
-    if (a.column !== column) a.position = this.top(a.column)
+    this.change(a, mutate)
     return this.save(a, event)
+  }
+
+  updateEach(cards: Actionable[], mutate: (a: Actionable) => EventInput | void) {
+    if (!cards.length) return
+    this.transaction(() => {
+      for (const a of cards) {
+        const event = this.change(a, mutate) ?? undefined
+        this.persist(a, event)
+        if (event) this.log(event, a)
+      }
+    })
+    this.deps.push({ type: 'board.changed' })
   }
 
   log(input: EventInput, a?: Actionable) {
@@ -204,9 +252,7 @@ export class Board implements IngestSink {
       data: input.data,
       createdAt: this.iso(),
     }
-    this.db
-      .prepare('INSERT INTO events (id, type, actionable_id, source, title, detail, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(event.id, event.type, event.actionableId ?? null, event.source, event.title, event.detail ?? null, event.createdAt, JSON.stringify(event))
+    this.sql('INSERT INTO events (id, type, actionable_id, source, title, detail, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(event.id, event.type, event.actionableId ?? null, event.source, event.title, event.detail ?? null, event.createdAt, JSON.stringify(event))
     this.deps.push({ type: 'activity.appended', event })
     return event
   }
@@ -301,15 +347,14 @@ export class Board implements IngestSink {
 
   repositoryRegistered() {
     const repos = this.deps.repositories()
-    for (const card of this.all()) {
-      if (!card.tags.includes(TAGS.needsRepository) || !findRepository(repos, card.repository)) continue
-      const { autoStartOnRepository, ...metadata } = card.metadata
-      this.update(card.id, (a) => {
-        a.tags = without(a.tags, TAGS.needsRepository)
-        a.metadata = metadata
-      })
-      if (autoStartOnRepository && !card.dismissedAt && card.column === 'todo') this.autoStart(card.id)
-    }
+    const cards = this.where(HAS_TAG, TAGS.needsRepository).filter((a) => findRepository(repos, a.repository))
+    const autoStart = cards.filter((a) => a.metadata.autoStartOnRepository && !a.dismissedAt && a.column === 'todo')
+    this.updateEach(cards, (a) => {
+      const { autoStartOnRepository: _, ...metadata } = a.metadata
+      a.tags = without(a.tags, TAGS.needsRepository)
+      a.metadata = metadata
+    })
+    for (const a of autoStart) this.autoStart(a.id)
   }
 
   logIgnored(signal: IngestSignal, outcome: Extract<ReceivedOutcome, `ignored:${string}`>, reason: string) {
@@ -387,19 +432,16 @@ export class Board implements IngestSink {
   }
 
   markSourceConnected(kind: SourceKind) {
-    for (const card of this.all()) {
-      if (card.source.kind === kind && card.tags.includes(TAGS.sourceDisconnected)) this.update(card.id, (a) => (a.tags = without(a.tags, TAGS.sourceDisconnected)))
-    }
+    this.updateEach(this.where(`json_extract(data, '$.source.kind') = ? AND ${HAS_TAG}`, kind, TAGS.sourceDisconnected), (a) => {
+      a.tags = without(a.tags, TAGS.sourceDisconnected)
+    })
   }
 
-
   markSourceDisconnected(kind: SourceKind) {
-    for (const card of this.all()) {
-      if (card.source.kind !== kind || card.dismissedAt || card.archivedAt || card.tags.includes(TAGS.sourceDisconnected)) continue
-      this.update(card.id, (a) => {
-        a.tags = unique([...a.tags, TAGS.sourceDisconnected])
-      })
-    }
+    const clause = `json_extract(data, '$.source.kind') = ? AND dismissed_at IS NULL AND archived_at IS NULL AND NOT ${HAS_TAG}`
+    this.updateEach(this.where(clause, kind, TAGS.sourceDisconnected), (a) => {
+      a.tags = [...a.tags, TAGS.sourceDisconnected]
+    })
   }
 
   create(input: ManualActionableInput) {
@@ -428,30 +470,22 @@ export class Board implements IngestSink {
   move(id: string, column: ColumnId, position: number) {
     const a = this.must(id)
     this.assertMove(a, column)
-    const columns = this.columns()
     const from = a.column
-    if (column === 'done' && from !== 'done') this.markDoneFields(a)
-    if (from === 'done' && column !== 'done') this.reopenFields(a)
+    if ((from === 'done') !== (column === 'done')) throw new Error(`${a.displayId} enters and leaves Done through Done and Reopen`)
+    const columns = this.columns()
     a.column = column
     a.tags = without(a.tags, TAGS.snoozed)
-    const siblings = this.all()
-      .filter((c) => c.column === column && c.id !== id && !c.archivedAt && !c.dismissedAt)
-      .sort((x, y) => x.position - y.position)
+    const siblings = this.where('board_column = ? AND id != ? AND archived_at IS NULL AND dismissed_at IS NULL', column, id).sort((x, y) => x.position - y.position)
     insertAt(siblings, position, a)
     const name = (cid: ColumnId) => columns.find((c) => c.id === cid)?.name ?? cid
-    this.db.exec('BEGIN')
-    try {
+    this.transaction(() => {
       siblings.forEach((c, i) => {
         if (c.position === i && c !== a) return
         c.position = i
         if (c !== a) this.write(c)
       })
-      this.save(a, from === column ? undefined : { type: from === 'done' ? 'reopened' : 'moved', detail: `${name(from)} → ${name(column)}`, actor: USER })
-      this.db.exec('COMMIT')
-    } catch (err) {
-      this.db.exec('ROLLBACK')
-      throw err
-    }
+      this.save(a, from === column ? undefined : { type: 'moved', detail: `${name(from)} → ${name(column)}`, actor: USER })
+    })
   }
 
   snooze(id: string, until: string) {
@@ -462,12 +496,9 @@ export class Board implements IngestSink {
   }
 
   reopenToTodo(id: string, detail?: string) {
-    assertAction(this.must(id), 'reopen_todo')
-    this.update(
-      id,
-      (a) => this.reopenFields(a),
-      { type: 'reopened', detail, actor: USER },
-    )
+    const a = this.must(id)
+    if (a.column !== 'done') throw new Error(`${a.displayId} is not done`)
+    this.update(id, (a) => this.reopenFields(a), { type: 'reopened', detail, actor: USER })
   }
 
   markDone(id: string, detail?: string) {
@@ -477,44 +508,48 @@ export class Board implements IngestSink {
   housekeeping() {
     const now = this.now().getTime()
     const s = this.deps.settings()
-    for (const a of this.all()) {
-      if (a.snoozedUntil && Date.parse(a.snoozedUntil) <= now)
-        this.update(
-          a.id,
-          (c) => {
-            delete c.snoozedUntil
-            if (c.column === 'in_progress' || c.column === 'done') return
-            c.tags = unique([...c.tags, TAGS.snoozed])
-            this.reopenFields(c)
-          },
-          { type: 'unsnoozed', actor: GANTRY },
-        )
-      else if (a.column === 'done' && a.doneAt && !a.archivedAt && Date.parse(a.doneAt) <= now - s.archiveDoneAfterDays * DAY_MS)
-        this.update(a.id, (c) => (c.archivedAt = this.iso()))
-    }
+    const iso = new Date(now).toISOString()
+    const archiveBefore = new Date(now - s.archiveDoneAfterDays * DAY_MS).toISOString()
+    const due = this.where(
+      "snoozed_until <= ? OR (board_column = 'done' AND archived_at IS NULL AND json_extract(data, '$.doneAt') <= ?)",
+      iso,
+      archiveBefore,
+    )
+    this.updateEach(due, (c) => {
+      if (!c.snoozedUntil || c.snoozedUntil > iso) return void (c.archivedAt = iso)
+      delete c.snoozedUntil
+      if (c.column !== 'in_progress' && c.column !== 'done') {
+        c.tags = unique([...c.tags, TAGS.snoozed])
+        this.reopenFields(c)
+      }
+      return { type: 'unsnoozed', actor: GANTRY }
+    })
     const cutoff = new Date(now - s.activityRetentionDays * DAY_MS).toISOString()
-    this.db.prepare('DELETE FROM events WHERE created_at < ?').run(cutoff)
-    this.db.prepare('DELETE FROM transcript WHERE at < ?').run(cutoff)
+    this.sql('DELETE FROM events WHERE created_at < ?').run(cutoff)
+    this.sql('DELETE FROM transcript WHERE at < ?').run(cutoff)
   }
 
   snapshot(filter: BoardFilter = {}): BoardSnapshot {
-    const all = this.all()
-    const actionables = all
+    const actionables = this.where(
+      '(? OR archived_at IS NULL) AND (? OR dismissed_at IS NULL) AND (? OR snoozed_until IS NULL)',
+      Number(!!filter.showArchived),
+      Number(!!filter.showDismissed),
+      Number(!!filter.showSnoozed),
+    )
       .filter(
         (a) =>
-          (filter.showArchived || !a.archivedAt) &&
-          (filter.showDismissed || !a.dismissedAt) &&
-          (filter.showSnoozed || !a.snoozedUntil) &&
           (!filter.sources?.length || filter.sources.includes(a.source.name) || filter.sources.includes(a.source.kind)) &&
           (!filter.providers?.length || (!!a.dispatch && filter.providers.includes(a.dispatch.provider))),
       )
       .sort(compareCards)
     const today = this.startOfToday()
-    const live = all.filter((a) => a.column === 'in_progress' && !a.dismissedAt)
-    const count = (state: AgentState) => live.filter((a) => a.agentState === state).length
+    const live = this.sql(
+      "SELECT agent_state AS state, COUNT(*) AS n FROM actionables WHERE board_column = 'in_progress' AND dismissed_at IS NULL GROUP BY agent_state",
+    ).all() as { state: AgentState | null; n: number }[]
+    const count = (state: AgentState) => live.find((r) => r.state === state)?.n ?? 0
     return {
       columns: this.columns(),
-      actionables,
+      actionables: actionables.map(snapshotCard),
       stats: {
         total: actionables.length,
         running: count('running'),
@@ -573,8 +608,10 @@ export class Board implements IngestSink {
 
   removeColumn(id: ColumnId) {
     if (!this.columns().some((c) => c.id === id && c.kind === 'custom')) throw new Error('Only custom columns can be removed')
-    for (const a of this.all().filter((c) => c.column === id))
-      this.update(a.id, (c) => (c.column = 'todo'), { type: 'moved', detail: 'Column removed → To-do', actor: USER })
+    this.updateEach(this.inColumn(id), (c) => {
+      c.column = 'todo'
+      return { type: 'moved', detail: 'Column removed → To-do', actor: USER }
+    })
     this.db.prepare('DELETE FROM columns WHERE id = ?').run(id)
     this.writeColumnOrder(this.columns().map((c) => c.id))
   }
@@ -607,23 +644,23 @@ export class Board implements IngestSink {
   }
 
   appendTranscript(actionableId: string, dispatchId: string, event: AgentEvent) {
-    this.db.prepare('INSERT INTO transcript (dispatch_id, actionable_id, at, event) VALUES (?, ?, ?, ?)').run(dispatchId, actionableId, this.iso(), JSON.stringify(event))
-    if (event.type !== 'raw') this.deps.push({ type: 'agent.event', actionableId, event })
+    if (event.type === 'raw') return
+    this.sql('INSERT INTO transcript (dispatch_id, actionable_id, at, event) VALUES (?, ?, ?, ?)').run(dispatchId, actionableId, this.iso(), JSON.stringify(event))
+    this.deps.push({ type: 'agent.event', actionableId, event })
   }
 
   transcript(actionableId: string): TranscriptEntry[] {
-    return (this.db.prepare('SELECT at, event FROM transcript WHERE actionable_id = ? ORDER BY rowid').all(actionableId) as { at: string; event: string }[]).map(
+    const rows = this.sql("SELECT at, event FROM transcript WHERE actionable_id = ? AND json_extract(event, '$.type') != 'raw' ORDER BY rowid").all(actionableId) as { at: string; event: string }[]
+    return rows.map(
       (r) => ({ at: r.at, event: JSON.parse(r.event) as AgentEvent }),
     )
   }
 
   awaitingInputCount() {
     return (
-      this.db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM actionables WHERE json_extract(data, '$.column') = 'in_progress' AND json_extract(data, '$.agentState') = 'awaiting_input' AND json_extract(data, '$.dismissedAt') IS NULL",
-        )
-        .get() as { n: number }
+      this.sql("SELECT COUNT(*) AS n FROM actionables WHERE board_column = 'in_progress' AND agent_state = 'awaiting_input' AND dismissed_at IS NULL").get() as {
+        n: number
+      }
     ).n
   }
 
