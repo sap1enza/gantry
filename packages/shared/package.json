@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./rpc": "./src/rpc.ts", "./ipc": "./src/ipc.ts" },
+  "exports": { ".": "./src/index.ts", "./rpc": "./src/rpc.ts", "./ipc": "./src/ipc.ts", "./rules": "./src/rules.ts" },
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run"

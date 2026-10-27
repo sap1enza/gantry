@@ -7,8 +7,15 @@ export interface SecretStore {
   clear(): void
 }
 
+export interface KeyValueStore {
+  get<T>(key: string): T | undefined
+  set(key: string, value: unknown): void
+  delete(key: string): void
+}
+
 export interface IngestionDeps {
   sink: IngestSink
+  kv: KeyValueStore
   getSettings(): Settings
   worker(): WorkerClient | undefined
   secrets: SecretStore
