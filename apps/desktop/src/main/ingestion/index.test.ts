@@ -41,18 +41,17 @@ describe('pollInbox', () => {
   })
 
   it('backs off a transiently failing item without blocking the ones behind it', async () => {
-    const worker = workerWith([{ id: '1', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'x' } }, create('2', 'a')])
+    const worker = workerWith([{ id: '1', receivedAt: '', payload: { kind: 'connection', provider: 'github', status: 'connected' } }, create('2', 'a')])
+    worker.refreshGrant.mockRejectedValueOnce(new TypeError('fetch failed')).mockResolvedValue(grantFor('github', { id: '1', login: 'lucas' }))
     const deps = fakeDeps(worker)
-    deps.sink.dismiss.mockRejectedValue(new TypeError('fetch failed'))
     const ctx = createCtx(deps)
     await pollInbox(ctx)
     expect(worker.ack).toHaveBeenLastCalledWith(['2'])
     await pollInbox(ctx)
-    expect(deps.sink.dismiss).toHaveBeenCalledTimes(1)
+    expect(worker.refreshGrant).toHaveBeenCalledTimes(1)
     deps.now = () => new Date(NOW.getTime() + 61_000)
-    deps.sink.dismiss.mockResolvedValue()
     await pollInbox(ctx)
-    expect(deps.sink.dismiss).toHaveBeenCalledTimes(2)
+    expect(worker.refreshGrant).toHaveBeenCalledTimes(2)
     expect(worker.ack).toHaveBeenLastCalledWith(['1', '2'])
   })
 
@@ -79,7 +78,7 @@ describe('pollInbox', () => {
     expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'boom' }), 'ignored:filtered', 'Failed after 5 attempts: unavailable')
   })
 
-  it('remembers a given-up key so a recurring failure is logged once', async () => {
+  it('remembers a given-up key for a day so a recurring failure is not re-logged every pass', async () => {
     const deps = fakeDeps()
     const ctx = createCtx(deps)
     const run = vi.fn(async () => {
@@ -91,6 +90,38 @@ describe('pollInbox', () => {
     expect(await ctx.retryable('k', s, run)).toBe(true)
     expect(run).toHaveBeenCalledTimes(1)
     expect(deps.sink.logIgnored).toHaveBeenCalledTimes(1)
+    expect(ctx.queued('k')).toEqual([])
+    deps.now = () => new Date(NOW.getTime() + 24 * 3_600_000)
+    await ctx.retryable('k', s, run)
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('holds API updates and dismissals behind a pending create, but not other items', async () => {
+    const slack: InboxItem = { id: '3', receivedAt: '', payload: { kind: 'slack.event', payload: {} } }
+    const worker = workerWith([create('1', 'a'), { id: '2', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'Honeybadger:hb-1' } }, slack])
+    const deps = fakeDeps(worker)
+    deps.sink.ingest.mockImplementation(() => {
+      throw new WorkerError(503, 'busy')
+    })
+    await pollInbox(createCtx(deps))
+    expect(deps.sink.dismiss).not.toHaveBeenCalled()
+    expect(worker.ack).toHaveBeenCalledWith(['3'])
+  })
+
+  it('retries an item whose provider needs reconnecting, then gives up and logs it', async () => {
+    const webhook: InboxItem = { id: 'gh', receivedAt: '', payload: { kind: 'github.webhook', event: 'check_suite', deliveryId: 'd', payload: { action: 'completed', check_suite: { conclusion: 'failure', pull_requests: [{ url: 'https://api.github.com/repos/a/b/pulls/1' }] } } } }
+    const worker = workerWith([webhook])
+    worker.refreshGrant.mockRejectedValue(new WorkerError(401, 'revoked'))
+    const deps = fakeDeps(worker)
+    routeFetch([['api.github.com', () => res({}, 401)]])
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ctx = connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' }))
+    await pollInbox(ctx)
+    expect(worker.ack).not.toHaveBeenCalled()
+    deps.kv.set('ingestion.retries', { 'inbox:gh': { attempts: 4, retryAt: NOW.getTime() } })
+    await pollInbox(ctx)
+    expect(worker.ack).toHaveBeenCalledWith(['gh'])
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(expect.objectContaining({ title: 'GitHub check_suite webhook' }), 'ignored:filtered', 'Failed after 5 attempts: github reconnect required')
   })
 
   it('handles a redelivered item only once', async () => {

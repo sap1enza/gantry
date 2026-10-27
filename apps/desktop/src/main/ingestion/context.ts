@@ -41,9 +41,11 @@ export const FETCH_TIMEOUT_MS = 20_000
 const MAX_ATTEMPTS = 5
 const RETRY_BASE_MS = 60_000
 const RETRY_MAX_MS = 3_600_000
+const GIVE_UP_MS = 24 * 3_600_000
 const RETRY_FORGET_MS = 7 * 24 * 3_600_000
 
 export function isTransient(e: unknown) {
+  if (e instanceof NotConnectedError) return true
   const status = (e as { status?: unknown })?.status
   if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
   return (e instanceof TypeError && e.message === 'fetch failed') || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
@@ -231,17 +233,18 @@ export function createCtx(deps: IngestionDeps) {
     for (const id of add) all[prefix + id] ??= { attempts: 0, retryAt: now() }
     saveRetries(all)
     return Object.keys(all)
-      .filter((k) => k.startsWith(prefix) && all[k]!.retryAt <= now())
+      .filter((k) => k.startsWith(prefix) && all[k]!.attempts < MAX_ATTEMPTS && all[k]!.retryAt <= now())
       .map((k) => k.slice(prefix.length))
   }
 
-  async function retryable(key: string, describe: IngestSignal, run: () => Promise<unknown>) {
+  async function retryable(key: string, describe: IngestSignal, run: () => Promise<unknown>, fatal = isFatal) {
     const state = retries()[key]
-    if (state && state.retryAt > now()) return state.attempts >= MAX_ATTEMPTS
+    if (state && state.attempts >= MAX_ATTEMPTS && now() - state.retryAt < GIVE_UP_MS) return true
+    if (state && state.retryAt > now()) return false
     try {
       await run()
     } catch (e) {
-      if (isFatal(e)) throw e
+      if (fatal(e)) throw e
       const attempts = (state?.attempts ?? 0) + 1
       if (isTransient(e) && attempts < MAX_ATTEMPTS) {
         saveRetries({ ...retries(), [key]: { attempts, retryAt: now() + Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_MAX_MS) } })
@@ -249,7 +252,7 @@ export function createCtx(deps: IngestionDeps) {
       }
       report(e)
       deps.sink.logIgnored(describe, 'ignored:filtered', `Failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${errorMessage(e)}`)
-      saveRetries({ ...retries(), [key]: { attempts: MAX_ATTEMPTS, retryAt: now() + RETRY_FORGET_MS } })
+      saveRetries({ ...retries(), [key]: { attempts: MAX_ATTEMPTS, retryAt: now() } })
       return true
     }
     if (state) {

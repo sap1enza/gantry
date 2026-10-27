@@ -1,6 +1,6 @@
 import { PROVIDER_SOURCE, type Actionable, type ConnectionInfo, type InboxItem, type IngestSignal, type OAuthProvider } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
-import { createCtx, isFatal, NotConnectedError, report, type Ctx } from './context'
+import { createCtx, NotConnectedError, report, ThrottledError, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
 import { emailContext, pollGmail } from './gmail'
 import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
@@ -74,17 +74,17 @@ function itemSignal(item: InboxItem): IngestSignal {
   }
 }
 
-async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) {
+async function handleInboxItem(ctx: Ctx, item: InboxItem, signal: IngestSignal, exclusive: Exclusive) {
   const p = item.payload
   switch (p.kind) {
     case 'actionable.create':
-      await ctx.emit(itemSignal(item))
+      await ctx.emit(signal)
       return
     case 'actionable.update':
-      if (ctx.admit(itemSignal(item))) ctx.deps.sink.applyPatch(p.target, p.patch)
+      if (ctx.admit(signal)) ctx.deps.sink.applyPatch(p.target, p.patch)
       return
     case 'actionable.dismiss':
-      if (ctx.admit(itemSignal(item))) await ctx.deps.sink.dismiss(p.target)
+      if (ctx.admit(signal)) await ctx.deps.sink.dismiss(p.target)
       return
     case 'connection':
       if (p.status === 'connected') {
@@ -123,15 +123,23 @@ export async function pollInbox(ctx: Ctx, exclusive: Exclusive = (run) => run())
   const { items } = await worker.inbox()
   const seen = ctx.deps.kv.get<string[]>('inbox.seen') ?? []
   const handled: string[] = []
+  let apiPending = false
   for (const item of items) {
     if (seen.includes(item.id)) {
       handled.push(item.id)
       continue
     }
-    try {
-      if (!(await ctx.retryable(`inbox:${item.id}`, itemSignal(item), () => handleInboxItem(ctx, item, exclusive)))) continue
-    } catch (e) {
-      if (!isFatal(e)) throw e
+    const api = item.payload.kind.startsWith('actionable.')
+    if (api && apiPending) continue
+    const signal = itemSignal(item)
+    const settled = await ctx
+      .retryable(`inbox:${item.id}`, signal, () => handleInboxItem(ctx, item, signal, exclusive), (e) => e instanceof ThrottledError)
+      .catch((e) => {
+        report(e)
+        return false
+      })
+    if (!settled) {
+      apiPending ||= api
       continue
     }
     handled.push(item.id)
