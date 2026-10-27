@@ -53,6 +53,7 @@ export function DetailsPanel({ id }: { id: string }) {
     setLive([])
     setAnswer('')
     setFeedback('')
+    setEvents([])
     let current = true
     void api.activity.list({ actionableId: id, limit: 6 }).then((log) => current && setEvents(log.events))
     return () => {
