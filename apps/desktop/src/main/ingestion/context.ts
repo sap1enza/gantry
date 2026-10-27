@@ -13,7 +13,7 @@ import {
   type TriggerId,
 } from '@gantry/shared'
 import type { IngestionDeps } from '../contracts'
-import { classify, type Verdict } from './llm'
+import { classify } from './llm'
 
 export class ThrottledError extends Error {
   constructor(
@@ -152,7 +152,7 @@ export function createCtx(deps: IngestionDeps) {
       return
     }
     if (opts.llm) {
-      const verdict = await llmVerdict(opts.llm.instruction, opts.llm.content)
+      const verdict = await classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), opts.llm.instruction, opts.llm.content)
       if (!verdict.decision) {
         deps.sink.logIgnored(signal, 'ignored:llm', verdict.reason)
         return
@@ -160,10 +160,6 @@ export function createCtx(deps: IngestionDeps) {
       signal = { ...signal, aiDetected: true, receivedDetail: verdict.reason }
     }
     return deps.sink.ingest(signal)
-  }
-
-  function llmVerdict(instruction: string, content: string): Promise<Verdict> {
-    return classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), instruction, content)
   }
 
   return {
@@ -174,7 +170,6 @@ export function createCtx(deps: IngestionDeps) {
     account: (p: OAuthProvider): GrantAccount | undefined => grant(p)?.account,
     connectionState,
     setConnection,
-    storeGrant,
     refresh,
     json,
     triggerOn,

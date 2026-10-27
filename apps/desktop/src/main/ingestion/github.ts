@@ -57,9 +57,9 @@ interface WebhookPayload {
   check_run?: { conclusion?: string | null; name?: string; pull_requests?: { url: string }[] }
 }
 
-export type ActiveKeys = Partial<Record<TriggerId, string[]>>
+type ActiveKeys = Partial<Record<TriggerId, string[]>>
 
-export const gh = <T>(ctx: Ctx, path: string, init?: RequestInit) =>
+const gh = <T>(ctx: Ctx, path: string, init?: RequestInit) =>
   ctx.json<T>('github', path.startsWith('http') ? path : `${API}${path}`, {
     ...init,
     headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
@@ -68,10 +68,10 @@ export const gh = <T>(ctx: Ctx, path: string, init?: RequestInit) =>
 export const mentions = (text: string | null | undefined, login: string) =>
   new RegExp(`(^|[^\\w-])@${login.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(text ?? '')
 
-export const severityAtLeast = (severity: string | undefined, min: Settings['github']['dependabotMinSeverity']) =>
+const severityAtLeast = (severity: string | undefined, min: Settings['github']['dependabotMinSeverity']) =>
   SEVERITY.indexOf(severity ?? 'low') >= SEVERITY.indexOf(min)
 
-export function repoFilter(settings: Settings, repo: string | undefined) {
+function repoFilter(settings: Settings, repo: string | undefined) {
   const selected = settings.github.repositories
   if (!repo || !selected.length || selected.some((r) => r.toLowerCase() === repo.toLowerCase())) return undefined
   return `Repository ${repo} is not selected`
@@ -242,7 +242,7 @@ const SEARCH = `query($authored: String!, $review: String!, $issues: String!) {
   issues: search(query: $issues, type: ISSUE, first: 100) { nodes { ...on Issue { url number title repository { nameWithOwner } } } }
 }`
 
-export type Current = Partial<Record<TriggerId, Map<string, IngestSignal>>>
+type Current = Partial<Record<TriggerId, Map<string, IngestSignal>>>
 
 export function currentFromSearch(ctx: Ctx, data: SearchResult, prev: ActiveKeys): Current {
   const settings = ctx.settings()
@@ -273,8 +273,7 @@ const RESOLVE_REASON: Partial<Record<TriggerId, string>> = {
   'github.issue': 'Issue closed',
 }
 
-export async function applyReconciliation(ctx: Ctx, current: Current) {
-  const prev = active(ctx)
+export async function applyReconciliation(ctx: Ctx, current: Current, prev = active(ctx)) {
   const next: ActiveKeys = { ...prev }
   for (const [trigger, reason] of Object.entries(RESOLVE_REASON) as [TriggerId, string][]) {
     const cur = current[trigger]
@@ -307,14 +306,14 @@ export async function reconcileGithub(ctx: Ctx) {
   if (ctx.triggerOn('github.dependabot')) {
     const alerts = (current['github.dependabot'] = new Map())
     const severities = SEVERITY.slice(SEVERITY.indexOf(settings.github.dependabotMinSeverity)).join(',')
-    for (const { fullName, selected } of await githubRepositories(ctx)) {
-      if (!selected) continue
+    const repos = settings.github.repositories.length ? settings.github.repositories : (await githubRepositories(ctx)).map((r) => r.fullName)
+    for (const fullName of repos) {
       for (const a of await gh<Alert[]>(ctx, `/repos/${fullName}/dependabot/alerts?state=open&per_page=100&severity=${severities}`).catch(() => [])) {
         alerts.set(a.html_url, alertSignal(ctx, a, fullName))
       }
     }
   }
-  await applyReconciliation(ctx, current)
+  await applyReconciliation(ctx, current, prev)
 }
 
 export async function githubRepositories(ctx: Ctx) {
@@ -325,7 +324,8 @@ export async function githubRepositories(ctx: Ctx) {
     const { repositories } = await gh<{ repositories: Repo[] }>(ctx, `/user/installations/${id}/repositories?per_page=100`)
     names.push(...repositories.map((r) => r.full_name))
   }
-  return names.map((fullName) => ({ fullName, selected: !repoFilter(ctx.settings(), fullName) }))
+  const settings = ctx.settings()
+  return names.map((fullName) => ({ fullName, selected: !repoFilter(settings, fullName) }))
 }
 
 export async function githubContext(ctx: Ctx, htmlUrl: string) {

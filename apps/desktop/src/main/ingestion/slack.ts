@@ -30,7 +30,7 @@ export interface PendingMention {
 
 const channelNames = new Map<string, string>()
 
-export async function slackApi<T>(ctx: Ctx, method: string, params: Record<string, string | number>) {
+async function slackApi<T>(ctx: Ctx, method: string, params: Record<string, string | number>) {
   const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))
   const body = await ctx.json<{ ok: boolean; error?: string } & T>('slack', `https://slack.com/api/${method}?${query}`)
   if (!body.ok) throw new Error(`Slack ${method}: ${body.error}`)
@@ -45,7 +45,7 @@ export function isMention(m: Pick<SlackMessage, 'text' | 'channel_type'>, me: st
   return text.includes(`<@${me}>`) || (DM_TYPES.has(m.channel_type ?? '') && /<!(here|channel)>/.test(text))
 }
 
-export async function channelFilter(ctx: Ctx, channel: string, channelType?: string) {
+async function channelFilter(ctx: Ctx, channel: string, channelType?: string) {
   const { channelAllow, channelDeny } = ctx.settings().slack
   if (DM_TYPES.has(channelType ?? '') || channel.startsWith('D') || (!channelAllow.length && !channelDeny.length)) return undefined
   if (!channelNames.has(channel)) {
@@ -102,13 +102,19 @@ const transcript = (messages: SlackMessage[], me: string, mentionTs?: string) =>
 export async function checkUnreplied(ctx: Ctx) {
   const me = ctx.account('slack')?.id
   if (!me) return
-  for (const p of (ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []).filter((x) => x.dueAt <= ctx.now())) {
-    if (ctx.triggerOn('slack.unreplied')) {
-      const messages = await conversation(ctx, p.channel, p.ts, p.threadTs)
-      const replied = messages.some((x) => x.user === me && Number(x.ts) > Number(p.ts))
-      await ctx.emit(p.signal, replied ? { filtered: 'Already replied' } : { llm: { instruction: UNREPLIED_INSTRUCTION, content: transcript(messages, me, p.ts) } })
-    } else await ctx.emit(p.signal)
-    ctx.deps.kv.set('slack.pending', (ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []).filter((x) => x.ts !== p.ts || x.channel !== p.channel))
+  const pending = () => ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []
+  const done = new Set<string>()
+  try {
+    for (const p of pending().filter((x) => x.dueAt <= ctx.now())) {
+      if (ctx.triggerOn('slack.unreplied')) {
+        const messages = await conversation(ctx, p.channel, p.ts, p.threadTs)
+        const replied = messages.some((x) => x.user === me && Number(x.ts) > Number(p.ts))
+        await ctx.emit(p.signal, replied ? { filtered: 'Already replied' } : { llm: { instruction: UNREPLIED_INSTRUCTION, content: transcript(messages, me, p.ts) } })
+      } else await ctx.emit(p.signal)
+      done.add(p.signal.externalKey)
+    }
+  } finally {
+    if (done.size) ctx.deps.kv.set('slack.pending', pending().filter((x) => !done.has(x.signal.externalKey)))
   }
 }
 
@@ -131,14 +137,17 @@ export async function scanFollowUps(ctx: Ctx) {
   const checked = Object.fromEntries(
     Object.entries(ctx.deps.kv.get<Record<string, string>>('slack.followUpChecked') ?? {}).filter(([, ts]) => Number(ts) * 1000 >= since),
   )
-  for (const [key, { channel, threadTs }] of threads) {
-    const { messages: thread } = await slackApi<{ messages: SlackMessage[] }>(ctx, 'conversations.replies', { channel, ts: threadTs, limit: 100 })
-    const last = thread.at(-1)?.ts ?? threadTs
-    if (checked[key] === last) continue
-    const root = thread[0] ?? { ts: threadTs }
-    const s = { ...messageSignal(ctx, { ...root, channel }, 'slack.follow_up'), externalKey: `${channel}:${threadTs}` }
-    await ctx.emit(s, { filtered: await channelFilter(ctx, channel), llm: { instruction: FOLLOW_UP_INSTRUCTION, content: transcript(thread, me) } })
-    checked[key] = last
+  try {
+    for (const [key, { channel, threadTs }] of threads) {
+      const thread = await conversation(ctx, channel, threadTs, threadTs)
+      const last = thread.at(-1)?.ts ?? threadTs
+      if (checked[key] === last) continue
+      const root = thread[0] ?? { ts: threadTs }
+      const s = { ...messageSignal(ctx, { ...root, channel }, 'slack.follow_up'), externalKey: `${channel}:${threadTs}` }
+      await ctx.emit(s, { filtered: await channelFilter(ctx, channel), llm: { instruction: FOLLOW_UP_INSTRUCTION, content: transcript(thread, me) } })
+      checked[key] = last
+    }
+  } finally {
     ctx.deps.kv.set('slack.followUpChecked', checked)
   }
 }

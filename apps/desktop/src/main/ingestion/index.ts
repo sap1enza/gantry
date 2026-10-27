@@ -39,7 +39,7 @@ function report(e: unknown) {
   console.error('[ingestion]', e)
 }
 
-export async function handleInboxItem(ctx: Ctx, item: InboxItem) {
+async function handleInboxItem(ctx: Ctx, item: InboxItem) {
   const p = item.payload
   switch (p.kind) {
     case 'actionable.create': {
@@ -80,6 +80,14 @@ export async function handleInboxItem(ctx: Ctx, item: InboxItem) {
     case 'slack.event':
       return slackEvent(ctx, p.payload as Parameters<typeof slackEvent>[1])
   }
+}
+
+function contextFor(ctx: Ctx, a: Actionable) {
+  if (a.source.kind === 'slack') return slackContext(ctx, a.metadata)
+  if (!a.externalKey) return undefined
+  if (a.source.kind === 'github') return githubContext(ctx, a.externalKey)
+  if (a.source.kind === 'email') return emailContext(ctx, a.externalKey)
+  return undefined
 }
 
 export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
@@ -162,14 +170,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     githubRepositories: () => githubRepositories(ctx),
     async fetchContext(a: Actionable) {
       try {
-        const text =
-          a.source.kind === 'github' && a.externalKey
-            ? await githubContext(ctx, a.externalKey)
-            : a.source.kind === 'slack'
-              ? await slackContext(ctx, a.metadata)
-              : a.source.kind === 'email' && a.externalKey
-                ? await emailContext(ctx, a.externalKey)
-                : undefined
+        const text = await contextFor(ctx, a)
         return text && (text.length > MAX_CONTEXT ? `${text.slice(0, MAX_CONTEXT)}\n…(truncated)` : text)
       } catch (e) {
         report(e)

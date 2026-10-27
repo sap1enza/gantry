@@ -21,9 +21,9 @@ interface GmailPart {
 
 const gmail = <T>(ctx: Ctx, path: string) => ctx.json<T>('google', `${API}${path}`)
 
-export const header = (m: GmailMessage, name: string) => m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? ''
+const header = (m: GmailMessage, name: string) => m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? ''
 
-export const senderDomain = (from: string) => (/@([^>\s]+)/.exec(from)?.[1] ?? '').toLowerCase()
+const senderDomain = (from: string) => (/@([^>\s]+)/.exec(from)?.[1] ?? '').toLowerCase()
 
 const domainMatches = (domain: string, entry: string) => {
   const d = entry.toLowerCase().replace(/^@/, '')
@@ -64,6 +64,7 @@ function emailSignal(ctx: Ctx, m: GmailMessage): IngestSignal {
 
 async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: string }> {
   const historyId = ctx.deps.kv.get<string>('gmail.historyId')
+  const inbox = ctx.settings().email.inboxOnly ? '&labelId=INBOX' : ''
   if (historyId) {
     try {
       const ids: string[] = []
@@ -72,7 +73,7 @@ async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: stri
       do {
         const res = await gmail<{ history?: { messagesAdded?: { message: { id: string } }[] }[]; historyId: string; nextPageToken?: string }>(
           ctx,
-          `/history?startHistoryId=${historyId}&historyTypes=messageAdded${pageToken && `&pageToken=${pageToken}`}`,
+          `/history?startHistoryId=${historyId}&historyTypes=messageAdded${inbox}${pageToken && `&pageToken=${pageToken}`}`,
         )
         for (const h of res.history ?? []) ids.push(...(h.messagesAdded ?? []).map((a) => a.message.id))
         latest = res.historyId
