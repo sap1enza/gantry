@@ -41,19 +41,47 @@ describe('emailFilter', () => {
 })
 
 describe('pollGmail', () => {
-  it('falls back to recent messages when the historyId expired, one signal per thread', async () => {
+  it('falls back to messages since the last successful poll when the historyId expired, one signal per thread', async () => {
     const deps = fakeDeps()
     const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me@acme.com' }))
     deps.kv.set('gmail.historyId', '100')
-    routeFetch([
+    deps.kv.set('gmail.polledAt', NOW.getTime() - 90_500)
+    const fetch = routeFetch([
       ['/history?', () => res({ error: 'gone' }, 404)],
       ['/profile', () => res({ historyId: '555' })],
       ['/messages?q=', () => res({ messages: [{ id: 'm2' }, { id: 'm1' }] })],
       [/\/messages\/m\d/, () => res(msg(['INBOX', 'UNREAD']))],
     ])
     await pollGmail(ctx)
+    const query = fetch.mock.calls.map(([url]) => String(url)).find((u) => u.includes('/messages?q='))!
+    expect(new URL(query).searchParams.get('q')).toBe(`after:${Math.floor((NOW.getTime() - 90_500) / 1000)}`)
     expect(deps.sink.ingest).toHaveBeenCalledTimes(1)
     expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ trigger: 'email.new', externalKey: 't1', title: 'Review' })
+    expect(deps.kv.get('gmail.historyId')).toBe('555')
+    expect(deps.kv.get('gmail.polledAt')).toBe(NOW.getTime())
+  })
+
+  it('backfills the last day only on first connect', async () => {
+    const deps = fakeDeps()
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me@acme.com' }))
+    const fetch = routeFetch([
+      ['/profile', () => res({ historyId: '555' })],
+      ['/messages?q=', () => res({})],
+    ])
+    await pollGmail(ctx)
+    expect(fetch.mock.calls.map(([url]) => String(url)).some((u) => u.includes(encodeURIComponent('newer_than:1d')))).toBe(true)
+  })
+
+  it('does not re-ingest old mail when the historyId expired without a recorded poll', async () => {
+    const deps = fakeDeps()
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me@acme.com' }))
+    deps.kv.set('gmail.historyId', '100')
+    const fetch = routeFetch([
+      ['/history?', () => res({ error: 'gone' }, 404)],
+      ['/profile', () => res({ historyId: '555' })],
+    ])
+    await pollGmail(ctx)
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/messages'))).toBe(false)
     expect(deps.kv.get('gmail.historyId')).toBe('555')
   })
 

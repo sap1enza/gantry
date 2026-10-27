@@ -64,8 +64,14 @@ function emailSignal(ctx: Ctx, m: GmailMessage): IngestSignal {
   }
 }
 
+async function recentMessageIds(ctx: Ctx, query: string) {
+  const recent = await gmail<{ messages?: { id: string }[] }>(ctx, `/messages?q=${encodeURIComponent(query)}&maxResults=50`)
+  return (recent.messages ?? []).map((m) => m.id).reverse()
+}
+
 async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: string }> {
   const historyId = ctx.deps.kv.get<string>('gmail.historyId')
+  const polledAt = ctx.deps.kv.get<number>('gmail.polledAt')
   const inbox = ctx.settings().email.inboxOnly ? '&labelId=INBOX' : ''
   if (historyId) {
     try {
@@ -87,15 +93,17 @@ async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: stri
     }
   }
   const profile = await gmail<{ historyId: string }>(ctx, '/profile')
-  const recent = await gmail<{ messages?: { id: string }[] }>(ctx, `/messages?q=${encodeURIComponent('newer_than:1d')}&maxResults=50`)
-  return { ids: (recent.messages ?? []).map((m) => m.id).reverse(), historyId: profile.historyId }
+  const query = polledAt ? `after:${Math.floor(polledAt / 1000)}` : historyId ? undefined : 'newer_than:1d'
+  return { ids: query ? await recentMessageIds(ctx, query) : [], historyId: profile.historyId }
 }
 
 export async function pollGmail(ctx: Ctx) {
   if (!ctx.account('google')) return
+  const startedAt = ctx.now()
   const { ids, historyId } = await newMessageIds(ctx)
   const queue = ctx.queued('gmail:', ids)
   ctx.deps.kv.set('gmail.historyId', historyId)
+  ctx.deps.kv.set('gmail.polledAt', startedAt)
   const f = ctx.settings().email
   const labelNames = new Map<string, string>()
   if (f.labels.length && queue.length) {
