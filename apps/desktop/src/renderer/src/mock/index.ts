@@ -525,6 +525,9 @@ export function createMockBridge(opts: MockOptions = {}): GantryBridge & { state
         if (method === 'github') state.account.githubLogin = 'alexlee'
         else state.account.email = email
       },
+      async completeAuth() {
+        state.account.signedIn = true
+      },
       async signOut() {
         state.account.signedIn = false
         state.account.githubLogin = undefined

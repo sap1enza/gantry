@@ -184,6 +184,10 @@ export function createApi(deps: ApiDeps): GantryApi {
       get: async () => account.get(),
       setName: (name) => account.setName(name),
       signIn: (method, email) => account.signIn(method, openExternal, email),
+      async completeAuth(code) {
+        await account.completeAuth(code)
+        deps.push({ type: 'connections.changed' })
+      },
       signOut: async () => account.signOut(),
       completeOnboarding: async () => account.completeOnboarding(),
     },

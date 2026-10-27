@@ -72,6 +72,14 @@ export class AccountService {
     await worker.startEmailSignIn(email.trim())
   }
 
+  async completeAuth(code: string) {
+    const worker = this.worker()
+    if (!worker) throw new Error('Gantry Worker is unreachable')
+    const result = await worker.completeAuth(code.trim())
+    if (result.kind === 'signin') await this.refresh()
+    return result
+  }
+
   // shortcut: sign-out is local only; the Worker has no sign-out route yet.
   signOut() {
     this.save({ signedIn: false, email: undefined, githubLogin: undefined, avatarUrl: undefined })

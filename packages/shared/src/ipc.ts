@@ -161,6 +161,7 @@ export interface GantryApi {
     get(): Promise<Account>
     setName(name: string): Promise<void>
     signIn(method: 'github' | 'email', email?: string): Promise<void>
+    completeAuth(code: string): Promise<void>
     signOut(): Promise<void>
     completeOnboarding(): Promise<void>
   }
