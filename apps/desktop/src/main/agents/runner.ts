@@ -4,12 +4,18 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   COMPLETION_INSTRUCTIONS,
+  errorMessage,
+  hasLiveAgent,
   isAgentActive,
   TAGS,
+  unique,
+  without,
   type Actionable,
+  type ActivityEvent,
   type AgentEvent,
   type AgentProvider,
   type AgentResult,
+  type AgentState,
   type ColumnId,
   type Dispatch,
   type DispatchOverrides,
@@ -17,10 +23,9 @@ import {
   type Repository,
   type Settings,
 } from '@gantry/shared'
-import { hasLiveAgent, unique, without } from '@gantry/shared'
 import { assertAction, type Actor, type AgentControl, type Board, type EventInput, GANTRY, USER } from '../domain/board'
 import { findRepository, inferRepository } from '../domain/repositories'
-import { type Exec, expandHome, shellCommand } from '../system/exec'
+import { type Exec, expandHome, git, shellCommand } from '../system/exec'
 
 export interface RunnerDeps {
   board: Board
@@ -53,7 +58,6 @@ export const slugify = (title: string) =>
     .slice(0, 40)
     .replace(/^-+|-+$/g, '') || 'task'
 
-
 const realPath = (path: string) => {
   try {
     return realpathSync(path)
@@ -65,10 +69,23 @@ const realPath = (path: string) => {
 const AGENT_UPDATE_INTERVAL_MS = 20_000
 const FRESH_USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+const stoppedFields = (c: Actionable) => {
+  c.column = 'todo'
+  c.agentState = 'stopped'
+  c.tags = unique([...without(c.tags, TAGS.queued), TAGS.stopped])
+  delete c.pendingQuestion
+}
+
+function stateEvent(from: AgentState | undefined, to: AgentState): ActivityEvent['type'] | undefined {
+  if (to === 'paused') return 'paused'
+  if (from === 'paused' && to === 'running') return 'resumed'
+}
 
 export class AgentRunner implements AgentControl {
   private updates = new Map<string, { at: number; text?: string; timer?: ReturnType<typeof setTimeout> }>()
+  private dispatches = new Map<string, string>()
+  private requested = new Map<string, AgentState>()
 
   constructor(private deps: RunnerDeps) {}
 
@@ -88,10 +105,6 @@ export class AgentRunner implements AgentControl {
 
   private agentActor(a: Actionable): Actor {
     return { kind: 'agent', name: this.deps.providers.get(a.dispatch?.provider ?? '')?.displayName ?? a.dispatch?.provider ?? 'Agent' }
-  }
-
-  private git(repositoryPath: string, args: string[]) {
-    return this.deps.exec('git', ['-C', repositoryPath, ...args])
   }
 
   private async ghAuthenticated() {
@@ -150,6 +163,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private enqueue(id: string, dispatch: Dispatch, event: EventInput) {
+    this.dispatches.set(id, dispatch.id)
     this.board.update(
       id,
       (a) => {
@@ -167,10 +181,10 @@ export class AgentRunner implements AgentControl {
   }
 
   private drain() {
-    const cards = this.board.all()
+    const cards = this.board.inColumn('in_progress')
     let active = cards.filter(isAgentActive).length
     const queued = cards
-      .filter((c) => c.column === 'in_progress' && c.agentState === 'queued' && !c.snoozedUntil && !c.dismissedAt)
+      .filter((c) => c.agentState === 'queued' && !c.snoozedUntil && !c.dismissedAt)
       .sort((x, y) => (x.dispatch?.startedAt ?? '').localeCompare(y.dispatch?.startedAt ?? ''))
     const max = this.deps.settings().maxConcurrentAgents
     for (const card of queued) {
@@ -186,6 +200,7 @@ export class AgentRunner implements AgentControl {
       c.tags = without(c.tags, TAGS.queued)
     })
     const d = a.dispatch!
+    this.dispatches.set(id, d.id)
     try {
       await this.prepareWorktree(a, d)
       const current = this.board.get(id)
@@ -205,12 +220,12 @@ export class AgentRunner implements AgentControl {
         (event) => this.handle(id, d.id, event),
       )
     } catch (err) {
-      this.handle(id, d.id, { type: 'error', message: message(err) })
+      this.handle(id, d.id, { type: 'error', message: errorMessage(err) })
     }
   }
 
   private async isRegisteredWorktree(d: Dispatch) {
-    const list = await this.git(d.repositoryPath, ['worktree', 'list', '--porcelain'])
+    const list = await git(this.deps.exec, d.repositoryPath, 'worktree', 'list', '--porcelain')
     const target = realPath(d.worktreePath)
     return list.code === 0 && list.output.split('\n').some((line) => line.startsWith('worktree ') && realPath(line.slice(9)) === target)
   }
@@ -224,10 +239,14 @@ export class AgentRunner implements AgentControl {
 
   private async createWorktree(a: Actionable, d: Dispatch) {
     const repo = this.deps.repositories().find((r) => r.path === d.repositoryPath)
-    const branchExists = (await this.git(d.repositoryPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.branch}`])).code === 0
-    const added = await this.git(
+    const branchExists = (await git(this.deps.exec, d.repositoryPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${d.branch}`)).code === 0
+    const added = await git(
+      this.deps.exec,
       d.repositoryPath,
-      branchExists ? ['worktree', 'add', d.worktreePath, d.branch] : ['worktree', 'add', d.worktreePath, '-b', d.branch, repo?.defaultBranch ?? 'HEAD'],
+      'worktree',
+      'add',
+      d.worktreePath,
+      ...(branchExists ? [d.branch] : ['-b', d.branch, repo?.defaultBranch ?? 'HEAD']),
     )
     if (added.code !== 0) throw new Error(`git worktree add failed: ${added.output.trim()}`)
     if (!repo?.setupCommand) return
@@ -239,50 +258,49 @@ export class AgentRunner implements AgentControl {
   }
 
   handle(id: string, dispatchId: string, event: AgentEvent) {
-    const card = this.board.get(id)
-    if (card?.dispatch?.id !== dispatchId) return
+    if (this.dispatches.get(id) !== dispatchId) return
     this.board.appendTranscript(id, dispatchId, event)
-    const live = hasLiveAgent(card)
     switch (event.type) {
       case 'message':
-        if (live) this.agentUpdate(id, event.text)
-        break
+        return this.agentUpdate(id, event.text)
       case 'session':
-        this.board.update(id, (a) => (a.dispatch!.sessionId = event.sessionId))
-        break
+        return void this.board.update(id, (a) => (a.dispatch!.sessionId = event.sessionId))
       case 'usage':
-        this.board.update(id, (a) => {
+        return void this.board.update(id, (a) => {
           a.dispatch!.inputTokens += event.inputTokens
           a.dispatch!.outputTokens += event.outputTokens
           a.dispatch!.costUsd += event.costUsd
         })
-        break
       case 'question':
-        if (live)
-          this.board.update(
-            id,
-            (a) => {
-              a.agentState = 'awaiting_input'
-              a.pendingQuestion = { id: event.id, prompt: event.prompt, options: event.options }
-            },
-            { type: 'awaiting_input', detail: event.prompt, actor: this.agentActor(card) },
-          )
-        break
       case 'state':
-        if (!live) break
-        if (event.state === 'completed') this.complete(id, this.agentActor(card))
-        else if (event.state === 'failed') this.fail(id, this.agentActor(card), 'Agent reported failure')
-        else if (event.state === 'paused' && card.agentState !== 'paused')
-          this.board.update(id, (a) => (a.agentState = 'paused'), { type: 'paused', actor: this.agentActor(card) })
-        else if (event.state === 'running' || event.state === 'paused' || event.state === 'awaiting_input')
-          this.board.update(id, (a) => (a.agentState = event.state))
-        break
       case 'result':
-        if (live) this.complete(id, this.agentActor(card), event.result)
-        break
       case 'error':
-        if (live) this.fail(id, this.agentActor(card), event.message)
-        break
+        return this.handleLive(id, event)
+    }
+  }
+
+  private handleLive(id: string, event: Extract<AgentEvent, { type: 'question' | 'state' | 'result' | 'error' }>) {
+    const card = this.board.must(id)
+    if (!hasLiveAgent(card)) return
+    const actor = this.agentActor(card)
+    if (event.type === 'question')
+      this.board.update(
+        id,
+        (a) => {
+          a.agentState = 'awaiting_input'
+          a.pendingQuestion = { id: event.id, prompt: event.prompt, options: event.options }
+        },
+        { type: 'awaiting_input', detail: event.prompt, actor },
+      )
+    else if (event.type === 'result') this.complete(id, actor, event.result)
+    else if (event.type === 'error') this.fail(id, actor, event.message)
+    else if (event.state === 'completed') this.complete(id, actor)
+    else if (event.state === 'failed') this.fail(id, actor, 'Agent reported failure')
+    else if ((event.state === 'running' || event.state === 'paused' || event.state === 'awaiting_input') && event.state !== card.agentState) {
+      const requested = this.requested.get(id) === event.state
+      this.requested.delete(id)
+      const type = requested ? undefined : stateEvent(card.agentState, event.state)
+      this.board.update(id, (a) => (a.agentState = event.state), type && { type, actor })
     }
   }
 
@@ -301,10 +319,11 @@ export class AgentRunner implements AgentControl {
     clearTimeout(u.timer)
     this.updates.set(id, { at: Date.now() })
     const card = this.board.get(id)
-    if (u.text && card) this.board.log({ type: 'agent_update', detail: u.text, actor: this.agentActor(card) }, card)
+    if (u.text && card && hasLiveAgent(card)) this.board.log({ type: 'agent_update', detail: u.text, actor: this.agentActor(card) }, card)
   }
 
   private finishUpdates(id: string) {
+    this.requested.delete(id)
     this.flushUpdate(id)
     this.updates.delete(id)
   }
@@ -341,23 +360,28 @@ export class AgentRunner implements AgentControl {
     this.drain()
   }
 
+  private async request(id: string, state: AgentState, call: () => Promise<void>) {
+    this.requested.set(id, state)
+    try {
+      await call()
+    } catch (err) {
+      this.requested.delete(id)
+      throw err
+    }
+  }
+
   async pause(id: string) {
     const a = this.board.must(id)
     assertAction(a, 'pause')
-    this.board.update(id, (c) => (c.agentState = 'paused'), { type: 'paused', actor: USER })
-    try {
-      await this.provider(a.dispatch!.provider).pause(id)
-    } catch (err) {
-      this.board.update(id, (c) => (c.agentState = a.agentState))
-      throw err
-    }
+    await this.request(id, 'paused', () => this.provider(a.dispatch!.provider).pause(id))
+    this.board.log({ type: 'paused', actor: USER }, a)
     this.drain()
   }
 
   async resume(id: string, feedback?: string) {
     const a = this.board.must(id)
     assertAction(a, 'resume')
-    if (this.board.all().filter(isAgentActive).length >= this.deps.settings().maxConcurrentAgents) {
+    if (this.board.inColumn('in_progress').filter(isAgentActive).length >= this.deps.settings().maxConcurrentAgents) {
       this.board.update(
         id,
         (c) => {
@@ -371,8 +395,8 @@ export class AgentRunner implements AgentControl {
       )
       return
     }
-    await this.provider(a.dispatch!.provider).resume(id, feedback)
-    this.board.update(id, (c) => (c.agentState = 'running'), { type: 'resumed', detail: feedback, actor: USER })
+    await this.request(id, 'running', () => this.provider(a.dispatch!.provider).resume(id, feedback))
+    this.board.log({ type: 'resumed', detail: feedback, actor: USER }, a)
   }
 
   async stop(id: string, detail?: string) {
@@ -389,16 +413,7 @@ export class AgentRunner implements AgentControl {
 
   private markStopped(id: string, detail: string | undefined, actor: Actor) {
     this.finishUpdates(id)
-    this.board.update(
-      id,
-      (c) => {
-        c.column = 'todo'
-        c.agentState = 'stopped'
-        c.tags = unique([...without(c.tags, TAGS.queued), TAGS.stopped])
-        delete c.pendingQuestion
-      },
-      { type: 'stopped', detail, actor },
-    )
+    this.board.update(id, stoppedFields, { type: 'stopped', detail, actor })
   }
 
   async answer(id: string, questionId: string, text: string) {
@@ -417,7 +432,10 @@ export class AgentRunner implements AgentControl {
 
   async reopen(id: string, feedback?: string) {
     const a = this.board.must(id)
-    if (a.column === 'done') return void this.board.reopenToTodo(id, feedback)
+    if (a.column === 'done') {
+      assertAction(a, 'reopen_todo')
+      return void this.board.reopenToTodo(id, feedback)
+    }
     assertAction(a, 'reopen')
     const previous = a.dispatch
     if (!previous) throw new Error(`${a.displayId} has no dispatch to reopen`)
@@ -447,11 +465,10 @@ export class AgentRunner implements AgentControl {
 
   async move(id: string, column: ColumnId, position: number) {
     const a = this.board.must(id)
+    this.board.assertMove(a, column)
     if (column === 'done' && a.column !== 'done') await this.done(id)
-    else {
-      this.board.assertMove(a, column)
-      if (a.column === 'in_progress' && column !== 'in_progress') await this.release(a)
-    }
+    else if (a.column === 'done' && column !== 'done') this.board.reopenToTodo(id)
+    else if (a.column === 'in_progress' && column !== 'in_progress') await this.release(a)
     this.board.move(id, column, position)
   }
 
@@ -464,7 +481,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private removeWorktree(d: Pick<Dispatch, 'repositoryPath' | 'worktreePath'>, force = false) {
-    return this.git(d.repositoryPath, ['worktree', 'remove', ...(force ? ['--force'] : []), d.worktreePath])
+    return git(this.deps.exec, d.repositoryPath, 'worktree', 'remove', ...(force ? ['--force'] : []), d.worktreePath)
   }
 
   async openInTerminal(id: string) {
@@ -474,13 +491,16 @@ export class AgentRunner implements AgentControl {
   }
 
   recover() {
-    for (const a of this.board.all())
-      if (a.column === 'in_progress' && a.agentState !== 'queued' && a.agentState !== 'stopped') this.markStopped(a.id, 'Gantry restarted', GANTRY)
+    const orphaned = this.board.inColumn('in_progress').filter((a) => a.agentState !== 'queued' && a.agentState !== 'stopped')
+    this.board.updateEach(orphaned, (a) => {
+      stoppedFields(a)
+      return { type: 'stopped', detail: 'Gantry restarted', actor: GANTRY }
+    })
     this.drain()
   }
 
   async stopAll() {
-    for (const a of this.board.all())
+    for (const a of this.board.inColumn('in_progress'))
       if (hasLiveAgent(a)) await this.stop(a.id, 'Deleting all data')
   }
 

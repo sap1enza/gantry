@@ -35,7 +35,7 @@ describe('ingest dedupe', () => {
   it('returns Done cards to To-do', () => {
     const { board } = setup()
     const { actionableId } = board.ingest(signal())
-    board.move(actionableId!, 'done', 0)
+    board.markDone(actionableId!)
     board.ingest(signal())
     expect(board.must(actionableId!)).toMatchObject({ column: 'todo' })
     expect(board.must(actionableId!).doneAt).toBeUndefined()
@@ -202,30 +202,44 @@ describe('guarded user transitions', () => {
     expect(() => board.move(id!, 'nope', 0)).toThrow()
   })
 
-  it('archives immediately on Done when keepCompleted is off', () => {
-    const { board, settings } = setup()
+  it('only moves into or out of Done through the runner', () => {
+    const { board } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    expect(() => board.move(id!, 'done', 0)).toThrow(/Done/)
+    board.markDone(id!)
+    expect(() => board.move(id!, 'todo', 0)).toThrow(/Done/)
+  })
+
+  it('archives immediately on Done when keepCompleted is off', async () => {
+    const { board, runner, settings } = setup()
     settings.update({ keepCompleted: false })
     const { actionableId: id } = board.ingest(signal())
-    board.move(id!, 'done', 0)
+    await runner.move(id!, 'done', 0)
     expect(board.must(id!).archivedAt).toBeDefined()
     expect(board.snapshot().actionables).toHaveLength(0)
+    await runner.move(id!, 'todo', 0)
+    expect(board.must(id!).column).toBe('todo')
+    expect(board.must(id!).archivedAt).toBeUndefined()
   })
 
   it('reopens Done cards to To-do only from Done', () => {
     const { board } = setup()
     const { actionableId: id } = board.ingest(signal())
     expect(() => board.reopenToTodo(id!)).toThrow()
-    board.move(id!, 'done', 0)
+    board.markDone(id!)
     board.reopenToTodo(id!)
     expect(board.must(id!).column).toBe('todo')
   })
 
-  it('logs reopened when a card leaves Done', () => {
-    const { board, eventTypes } = setup()
+  it('logs done and reopened when a card is dragged into and out of Done', async () => {
+    const { board, runner, eventTypes } = setup()
     const { actionableId: id } = board.ingest(signal())
-    board.move(id!, 'done', 0)
-    board.move(id!, 'todo', 0)
-    expect(eventTypes(id).slice(-2)).toEqual(['moved', 'reopened'])
+    const blocked = board.createColumn('Blocked', 1)
+    await runner.move(id!, 'done', 0)
+    await runner.move(id!, blocked.id, 0)
+    expect(eventTypes(id).slice(-3)).toEqual(['done', 'reopened', 'moved'])
+    expect(board.must(id!).column).toBe(blocked.id)
+    expect(board.must(id!).doneAt).toBeUndefined()
   })
 
   it('refuses to snooze from Review or into the past', async () => {
@@ -301,7 +315,7 @@ describe('housekeeping', () => {
   it('archives Done cards after archiveDoneAfterDays and prunes old activity', () => {
     const { board, advance } = setup()
     const { actionableId: id } = board.ingest(signal())
-    board.move(id!, 'done', 0)
+    board.markDone(id!)
     advance(6 * DAY)
     board.housekeeping()
     expect(board.must(id!).archivedAt).toBeUndefined()
@@ -333,6 +347,34 @@ describe('queries', () => {
     expect(page2.events.map((e) => e.title)).toEqual(['Card 1', 'Card 0'])
     expect(page2.nextCursor).toBeUndefined()
     expect(page1.totalToday).toBe(5)
+  })
+
+  it('trims snapshot cards to a summary', async () => {
+    const { board, runner } = setup()
+    const id = board.ingest(signal({ body: 'x'.repeat(500) })).actionableId!
+    await runner.start(id)
+    const [card] = board.snapshot().actionables
+    expect(card!.body).toHaveLength(280)
+    expect(card!.dispatch!.instructions).toBe('')
+    expect(board.must(id).dispatch!.instructions).toContain('x'.repeat(500))
+  })
+
+  it('does not persist raw agent events and hides raw rows from older databases', () => {
+    const { db, board } = setup()
+    board.appendTranscript('a', 'd', { type: 'raw', payload: {} })
+    db.prepare('INSERT INTO transcript (dispatch_id, actionable_id, at, event) VALUES (?, ?, ?, ?)').run('d', 'a', 'x', '{"type":"raw","payload":{}}')
+    board.appendTranscript('a', 'd', { type: 'message', text: 'hi' })
+    expect(board.transcript('a').map((e) => e.event.type)).toEqual(['message'])
+  })
+
+  it('applies bulk updates in one transaction with one board push', () => {
+    const { board, pushes } = setup()
+    board.ingest(signal())
+    board.ingest(signal({ externalKey: 'https://github.com/acme/api/pull/2' }))
+    pushes.length = 0
+    board.markSourceDisconnected('github')
+    expect(pushes.filter((p) => p.type === 'board.changed')).toHaveLength(1)
+    expect(board.all().every((a) => a.tags.includes(TAGS.sourceDisconnected))).toBe(true)
   })
 
   it('pushes board and activity changes', () => {

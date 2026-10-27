@@ -14,6 +14,8 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('gantry://actionable/GT-012/')).toEqual({ kind: 'actionable', id: 'GT-012' })
     expect(parseDeepLink('gantry://settings')).toBeUndefined()
     expect(parseDeepLink('https://actionable/x')).toBeUndefined()
+    expect(parseDeepLink('gantry://actionable/%E0')).toBeUndefined()
+    expect(parseDeepLink('gantry://actionable/a/b')).toBeUndefined()
   })
 
   it('routes auth completion codes and rejects malformed ones', () => {

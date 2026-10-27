@@ -1,10 +1,17 @@
-export const PROTOCOL = 'gantry'
+import { DEEP_LINKS } from '@gantry/shared'
 
 export type DeepLink = { kind: 'actionable'; id: string } | { kind: 'authComplete'; code: string }
 
-export function parseDeepLink(url: string): DeepLink | undefined {
-  const actionable = /^gantry:\/\/actionable\/([\w.:-]+)\/?$/.exec(url.trim())
-  if (actionable) return { kind: 'actionable', id: decodeURIComponent(actionable[1]!) }
-  const auth = /^gantry:\/\/auth\/complete\/?\?code=([\w-]+)$/.exec(url.trim())
-  return auth ? { kind: 'authComplete', code: auth[1]! } : undefined
+const ID = /^[\w.:-]+$/
+const CODE = /^[\w-]+$/
+
+export function parseDeepLink(raw: string): DeepLink | undefined {
+  const url = URL.parse(raw.trim())
+  if (url?.protocol !== `${DEEP_LINKS.scheme}:`) return undefined
+  const path = `${url.host}${url.pathname}`.replace(/\/$/, '')
+  const [kind, ...rest] = path.split('/')
+  const id = rest.join('/')
+  if (kind === 'actionable' && ID.test(id)) return { kind: 'actionable', id }
+  const code = url.searchParams.get('code') ?? ''
+  if (path === 'auth/complete' && CODE.test(code)) return { kind: 'authComplete', code }
 }

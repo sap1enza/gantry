@@ -56,17 +56,19 @@ export function createSecretStore(db: Db, cipher: Cipher): SecretStore {
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 export function createSettingsStore(db: Db) {
+  let cached: Settings | undefined
+  const load = () => {
+    const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
+    const settings = structuredClone(DEFAULT_SETTINGS) as unknown as Record<string, unknown>
+    for (const { key, value } of rows) {
+      if (!(key in settings)) continue
+      const stored: unknown = JSON.parse(value)
+      settings[key] = isPlainObject(settings[key]) && isPlainObject(stored) ? { ...settings[key], ...stored } : stored
+    }
+    return settings as unknown as Settings
+  }
   return {
-    get(): Settings {
-      const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
-      const settings = structuredClone(DEFAULT_SETTINGS) as unknown as Record<string, unknown>
-      for (const { key, value } of rows) {
-        if (!(key in settings)) continue
-        const stored: unknown = JSON.parse(value)
-        settings[key] = isPlainObject(settings[key]) && isPlainObject(stored) ? { ...settings[key], ...stored } : stored
-      }
-      return settings as unknown as Settings
-    },
+    get: (): Settings => (cached ??= load()),
     update(patch: Partial<Settings>): Settings {
       const current = this.get() as unknown as Record<string, unknown>
       const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
@@ -74,6 +76,7 @@ export function createSettingsStore(db: Db) {
         if (!(key in current) || value === undefined) continue
         upsert.run(key, JSON.stringify(isPlainObject(current[key]) && isPlainObject(value) ? { ...current[key], ...value } : value))
       }
+      cached = undefined
       return this.get()
     },
   }

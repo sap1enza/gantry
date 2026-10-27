@@ -25,7 +25,7 @@ function api(s = setup(), workerFetch?: typeof fetch, ingestion?: Partial<Ingest
     settings: s.settings,
     repos: s.repos,
     secrets,
-    ingestion: ingestion as Ingestion | undefined,
+    ingestion: { stop: () => undefined, ...ingestion } as Ingestion,
     providers: new Map([[s.provider.id, s.provider]]),
     exec: async (_, args) => {
       if (args.includes('--show-toplevel')) return { code: 0, output: '/code/web\n' }
@@ -126,13 +126,14 @@ describe('api follow-ups', () => {
     expect(syncNow).toHaveBeenCalled()
   })
 
-  it('disconnect logs one connection event and tags cards from that source', async () => {
+  it('disconnect leaves logging and tagging to ingestion', async () => {
     const s = setup()
-    const { gantry } = api(s, undefined, { disconnect: async (p) => void s.board.logConnection(p, 'disconnected') })
-    const { actionableId } = s.board.ingest(signal({ source: { kind: 'email', name: 'Gmail' }, trigger: 'email.new' }))
+    const disconnect = vi.fn(async () => undefined)
+    const markSourceDisconnected = vi.spyOn(s.board, 'markSourceDisconnected')
+    const { gantry } = api(s, undefined, { disconnect })
     await gantry.connections.disconnect('google')
-    expect(s.board.events({ types: ['connection'] }).events).toHaveLength(1)
-    expect(s.board.must(actionableId!).tags).toContain(TAGS.sourceDisconnected)
+    expect(disconnect).toHaveBeenCalledWith('google')
+    expect(markSourceDisconnected).not.toHaveBeenCalled()
   })
 
   it('registering a repository clears Needs repository and auto-starts waiting cards', async () => {

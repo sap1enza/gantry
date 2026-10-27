@@ -13,7 +13,7 @@ import type { RepositoryStore, SettingsStore } from './db/stores'
 import { type Board, USER } from './domain/board'
 import { parseRemote } from './domain/repositories'
 import type { AccountService } from './system/account'
-import type { Exec } from './system/exec'
+import { type Exec, git } from './system/exec'
 
 export interface Platform {
   openExternal(url: string): Promise<void>
@@ -31,7 +31,7 @@ export interface ApiDeps {
   settings: SettingsStore
   repos: RepositoryStore
   secrets: SecretStore
-  ingestion?: Ingestion
+  ingestion: Ingestion
   providers: Map<string, AgentProvider>
   exec: Exec
   platform: Platform
@@ -50,23 +50,18 @@ export function toCsv(events: ActivityEvent[]) {
 }
 
 export function createApi(deps: ApiDeps): GantryApi {
-  const { board, runner, account, settings, repos, platform } = deps
+  const { board, runner, account, settings, repos, platform, ingestion } = deps
   const fetchImpl = deps.fetch ?? fetch
 
   const openExternal = async (url: string) => {
     if (!EXTERNAL_PROTOCOLS.has(new URL(url).protocol)) throw new Error(`Refusing to open ${url}`)
     await platform.openExternal(url)
   }
-  const ingestion = () => {
-    if (!deps.ingestion) throw new Error('Integrations are unavailable')
-    return deps.ingestion
-  }
   const worker = () => {
     const client = account.worker()
     if (!client) throw new Error('This device is not registered with the Gantry Worker yet')
     return client
   }
-  const git = (path: string, ...args: string[]) => deps.exec('git', ['-C', path, ...args])
   const updateSettings = (patch: Partial<Settings>) => {
     const next = settings.update(patch)
     deps.onSettingsChanged(next)
@@ -112,24 +107,18 @@ export function createApi(deps: ApiDeps): GantryApi {
       },
     },
     connections: {
-      list: async () => deps.ingestion?.connections() ?? [],
-      connect: (provider) => ingestion().connect(provider),
-      async disconnect(provider) {
-        await ingestion().disconnect(provider)
-        board.markSourceDisconnected(provider === 'google' ? 'email' : provider)
-      },
-      async manageAccess(provider) {
-        const url = ingestion().manageAccessUrl(provider)
-        if (url) await openExternal(url)
-      },
-      syncNow: () => ingestion().syncNow(),
-      githubRepositories: () => ingestion().githubRepositories(),
+      list: async () => ingestion.connections(),
+      connect: (provider) => ingestion.connect(provider),
+      disconnect: (provider) => ingestion.disconnect(provider),
+      manageAccess: (provider) => openExternal(ingestion.manageAccessUrl(provider)),
+      syncNow: () => ingestion.syncNow(),
+      githubRepositories: () => ingestion.githubRepositories(),
       apiTokens: () => worker().listApiTokens(),
       createApiToken: (name) => worker().createApiToken(name),
       revokeApiToken: (id) => worker().revokeApiToken(id),
       async sendTestActionable() {
         await worker().sendTestActionable()
-        await deps.ingestion?.syncNow().catch(() => undefined)
+        await ingestion.syncNow().catch(() => undefined)
       },
       endpoint: async () => new URL('/v1/actionables', settings.get().workerUrl).toString(),
     },
@@ -152,15 +141,15 @@ export function createApi(deps: ApiDeps): GantryApi {
       async add() {
         const picked = await platform.chooseDirectory('Choose a git repository')
         if (!picked) return undefined
-        const top = await git(picked, 'rev-parse', '--show-toplevel')
+        const top = await git(deps.exec, picked, 'rev-parse', '--show-toplevel')
         if (top.code !== 0) throw new Error('Not a git repository')
         const path = top.output.trim()
-        const origin = await git(path, 'remote', 'get-url', 'origin')
+        const origin = await git(deps.exec, path, 'remote', 'get-url', 'origin')
         const remote = origin.code === 0 ? parseRemote(origin.output) : undefined
         if (!remote) throw new Error('Repository has no origin remote')
-        const head = await git(path, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
+        const head = await git(deps.exec, path, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
         const defaultBranch =
-          head.code === 0 ? head.output.trim().replace(/^origin\//, '') : (await git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).output.trim()
+          head.code === 0 ? head.output.trim().replace(/^origin\//, '') : (await git(deps.exec, path, 'rev-parse', '--abbrev-ref', 'HEAD')).output.trim()
         const repo = repos.add({ path, remote, defaultBranch })
         board.repositoryRegistered()
         return repo
@@ -200,7 +189,7 @@ export function createApi(deps: ApiDeps): GantryApi {
         }
       },
       async deleteAllData() {
-        deps.ingestion?.stop()
+        ingestion.stop()
         await runner.stopAll()
         await runner.removeAllWorktrees()
         const remoteError = await account
