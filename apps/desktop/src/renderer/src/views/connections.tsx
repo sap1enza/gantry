@@ -111,21 +111,22 @@ function ConnHead({ icon, name, info, sub, children }: { icon: ReactNode; name: 
           {info.status === 'reconnect_required' ? (info.detail ?? 'OAuth session expired. Existing actionables are kept.') : info.status === 'connected' ? `OAuth · Synced ${ago(info.lastSyncAt)}${sub ? ` · ${sub}` : ''}` : 'Connect to start receiving events.'}
         </span>
         <span className="spacer" />
-        {info.status === 'connected' ? (
-          <>
-            <button className="btn sm" onClick={() => app.run(api.connections.manageAccess(provider))}>
-              Manage access
-            </button>
-            <button
-              className="btn sm"
-              onClick={async () => {
-                if (await app.confirm(`Disconnect ${name}?`, 'Gantry revokes the grant. Existing cards are kept and tagged “Source disconnected”.', 'Disconnect')) await app.run(api.connections.disconnect(provider))
-              }}
-            >
-              Disconnect
-            </button>
-          </>
-        ) : (
+        {info.status === 'connected' && (
+          <button className="btn sm" onClick={() => app.run(api.connections.manageAccess(provider))}>
+            Manage access
+          </button>
+        )}
+        {info.status !== 'disconnected' && (
+          <button
+            className="btn sm"
+            onClick={async () => {
+              if (await app.confirm(`Disconnect ${name}?`, 'Gantry revokes the grant. Existing cards are kept and tagged “Source disconnected”.', 'Disconnect')) await app.run(api.connections.disconnect(provider))
+            }}
+          >
+            Disconnect
+          </button>
+        )}
+        {info.status !== 'connected' && (
           <button className={`btn ${info.status === 'disconnected' ? 'primary' : ''}`} onClick={() => auth.start(api.connections.connect(provider))}>
             {info.status === 'reconnect_required' ? <RefreshCw size={13} /> : <ArrowUpRight size={13} />}
             {info.status === 'reconnect_required' ? 'Reconnect' : 'Connect'}
