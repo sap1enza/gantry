@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.310",
-    "@gantry/shared": "workspace:*"
+    "@gantry/shared": "workspace:*",
+    "lucide-react": "1.61.0"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
