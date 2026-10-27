@@ -319,6 +319,14 @@ describe('lifecycle', () => {
     expect(s.eventTypes(id).filter((t) => t === 'paused')).toHaveLength(1)
   })
 
+  it('logs a single paused event when the provider echoes a user pause', async () => {
+    const s = setup()
+    const id = await started(s)
+    vi.spyOn(s.provider, 'pause').mockImplementation(async () => s.provider.emit(id, { type: 'state', state: 'paused' }))
+    await s.runner.pause(id)
+    expect(s.board.events({ types: ['paused'] }).events.map((e) => e.actor.kind)).toEqual(['user'])
+  })
+
   it('throttles agent updates to one per 20 s per card, keeping the latest', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {

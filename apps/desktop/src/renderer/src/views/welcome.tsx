@@ -131,7 +131,13 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
             </li>
             <li>
               {app.checks?.gh.authenticated ? <CircleCheck size={13} /> : <CircleDashed size={13} />}
-              {app.checks?.gh.authenticated ? 'GitHub CLI · Authenticated' : 'GitHub CLI not authenticated — run `gh auth login` to use the Full preset'}
+              {app.checks?.gh.authenticated ? (
+                'GitHub CLI · Authenticated'
+              ) : (
+                <>
+                  GitHub CLI not authenticated — run <code>gh auth login</code> to use the Full preset
+                </>
+              )}
             </li>
             <li>
               <ShieldCheck size={13} /> Review permissions before dispatch

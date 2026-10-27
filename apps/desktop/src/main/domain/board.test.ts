@@ -154,6 +154,8 @@ describe('api actionables', () => {
     board.ingest(apiSignal())
     board.applyPatch('hb-1', { title: 'By external id' })
     expect(board.must('wrk-1').title).toBe('By external id')
+    board.ingest(apiSignal({ id: 'wrk-9', source: { kind: 'api', name: 'Sentry' }, externalKey: 'Sentry:hb-1' }))
+    expect(board.resolveTarget('hb-1')).toBeUndefined()
   })
 
   it('ignores patches and dismissals aimed at non-API cards', async () => {

@@ -189,7 +189,7 @@ export function PreferencesView() {
                     { value: 'openai', label: 'OpenAI' },
                     { value: 'openai_compatible', label: 'OpenAI-compatible URL' },
                   ]}
-                  onChange={(v) => v !== s.llm.provider && set({ llm: { provider: v, model: LLM_DEFAULT_MODEL[v] } })}
+                  onChange={(v) => v !== s.llm.provider && set({ llm: { ...s.llm, provider: v, model: LLM_DEFAULT_MODEL[v] } })}
                 />
               </Row>
               <Row title="Model">

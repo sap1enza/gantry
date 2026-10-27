@@ -135,11 +135,17 @@ export class Board implements IngestSink {
 
   resolveTarget(target: string) {
     return parseRow(
-      this.db
-        .prepare("SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ? OR (dedupe_key LIKE 'api:%' AND substr(dedupe_key, -?) = ?)")
-        .get(target, target.toUpperCase(), dedupeKey('api', target), target.length + 1, `:${target}`) ??
-        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target),
+      this.db.prepare('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?').get(target, target.toUpperCase(), dedupeKey('api', target)) ??
+        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target) ??
+        this.byBareExternalId(target),
     )
+  }
+
+  private byBareExternalId(externalId: string) {
+    const rows = this.db
+      .prepare("SELECT data FROM actionables WHERE dedupe_key LIKE 'api:%' AND substr(dedupe_key, -?) = ? LIMIT 2")
+      .all(externalId.length + 1, `:${externalId}`)
+    return rows.length === 1 ? rows[0] : undefined
   }
 
   private byKey(kind: SourceKind, externalKey: string) {

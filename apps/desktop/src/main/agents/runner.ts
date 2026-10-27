@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -52,6 +53,14 @@ export const slugify = (title: string) =>
     .replace(/^-+|-+$/g, '') || 'task'
 
 export const expandHome = (path: string, home: string) => (path === '~' ? home : path.startsWith('~/') ? join(home, path.slice(2)) : path)
+
+const realPath = (path: string) => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
 
 const AGENT_UPDATE_INTERVAL_MS = 20_000
 const FRESH_USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
@@ -202,7 +211,8 @@ export class AgentRunner implements AgentControl {
 
   private async isRegisteredWorktree(d: Dispatch) {
     const list = await this.git(d.repositoryPath, ['worktree', 'list', '--porcelain'])
-    return list.code === 0 && list.output.split('\n').includes(`worktree ${d.worktreePath}`)
+    const target = realPath(d.worktreePath)
+    return list.code === 0 && list.output.split('\n').some((line) => line.startsWith('worktree ') && realPath(line.slice(9)) === target)
   }
 
   private async prepareWorktree(a: Actionable, d: Dispatch) {
@@ -294,8 +304,13 @@ export class AgentRunner implements AgentControl {
     if (u.text && card) this.board.log({ type: 'agent_update', detail: u.text, actor: this.agentActor(card) }, card)
   }
 
-  private complete(id: string, actor: Actor, result?: AgentResult) {
+  private finishUpdates(id: string) {
     this.flushUpdate(id)
+    this.updates.delete(id)
+  }
+
+  private complete(id: string, actor: Actor, result?: AgentResult) {
+    this.finishUpdates(id)
     this.board.update(
       id,
       (a) => {
@@ -311,7 +326,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private fail(id: string, actor: Actor, error: string) {
-    this.flushUpdate(id)
+    this.finishUpdates(id)
     this.board.update(
       id,
       (a) => {
@@ -329,8 +344,13 @@ export class AgentRunner implements AgentControl {
   async pause(id: string) {
     const a = this.board.must(id)
     assertAction(a, 'pause')
-    await this.provider(a.dispatch!.provider).pause(id)
     this.board.update(id, (c) => (c.agentState = 'paused'), { type: 'paused', actor: USER })
+    try {
+      await this.provider(a.dispatch!.provider).pause(id)
+    } catch (err) {
+      this.board.update(id, (c) => (c.agentState = a.agentState))
+      throw err
+    }
     this.drain()
   }
 
@@ -368,6 +388,7 @@ export class AgentRunner implements AgentControl {
   }
 
   private markStopped(id: string, detail: string | undefined, actor: Actor) {
+    this.finishUpdates(id)
     this.board.update(
       id,
       (c) => {
