@@ -7,7 +7,7 @@ const encoder = new TextEncoder()
 
 const toHex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
 
-export const randomToken = (bytes = 32) => encodeBase64Url(crypto.getRandomValues(new Uint8Array(bytes)).buffer).replace(/=+$/, '')
+export const randomToken = () => encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)).buffer).replace(/=+$/, '')
 
 export const sha256 = async (value: string) => toHex(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
 
