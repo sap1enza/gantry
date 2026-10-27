@@ -224,6 +224,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261027.1
         version: 5.20261027.1
+      miniflare:
+        specifier: 5.20261023.0-beta
+        version: 5.20261023.0-beta(@types/node@26.6.5)
       typescript:
         specifier: 7.0.2
         version: 7.0.2

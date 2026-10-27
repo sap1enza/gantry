@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "build": "wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc -p .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@gantry/shared": "workspace:*",
@@ -19,6 +19,7 @@
     "@cloudflare/workers-types": "5.20261027.1",
     "typescript": "7.0.2",
     "vitest": "5.0.5",
-    "wrangler": "4.153.0"
+    "wrangler": "4.153.0",
+    "miniflare": "5.20261023.0-beta"
   }
 }
