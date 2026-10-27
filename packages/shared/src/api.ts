@@ -41,7 +41,7 @@ export type InboxPayload =
   | { kind: 'actionable.dismiss'; target: string }
   | { kind: 'github.webhook'; event: string; deliveryId: string; payload: unknown }
   | { kind: 'slack.event'; payload: unknown }
-  | { kind: 'connection'; provider: OAuthProvider; status: 'connected' | 'reconnect_required' | 'disconnected'; account?: GrantAccount }
+  | { kind: 'connection'; provider: OAuthProvider; status: ConnectionStatus; account?: GrantAccount }
 
 export interface InboxItem {
   id: string
@@ -95,7 +95,9 @@ export interface MeResponse {
   email?: string
   githubLogin?: string
   signedIn: boolean
-  grants: { provider: OAuthProvider; account: GrantAccount; status: 'connected' | 'reconnect_required' }[]
+  grants: { provider: OAuthProvider; account: GrantAccount; status: Exclude<ConnectionStatus, 'disconnected'> }[]
 }
 
 export type AuthCompletion = { kind: 'signin' } | { kind: 'grant'; provider: OAuthProvider }
+
+export type ConnectionStatus = 'connected' | 'reconnect_required' | 'disconnected'

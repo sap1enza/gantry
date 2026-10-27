@@ -45,7 +45,7 @@ export interface IngestSink {
   logIgnored(signal: IngestSignal, outcome: Extract<ReceivedOutcome, `ignored:${string}`>, reason: string): void
   resolve(signal: ResolveSignal): void
   applyPatch(idOrExternal: string, patch: ActionablePatch): void
-  dismiss(idOrExternal: string): void
+  dismiss(idOrExternal: string): Promise<void>
   logConnection(provider: string, status: string, detail?: string): void
   markSourceDisconnected(kind: SourceKind): void
 }

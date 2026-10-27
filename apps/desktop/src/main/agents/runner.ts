@@ -17,9 +17,10 @@ import {
   type Repository,
   type Settings,
 } from '@gantry/shared'
-import { assertAction, type Actor, type AgentControl, type Board, type EventInput, GANTRY, hasLiveAgent, unique, USER, without } from '../domain/board'
+import { hasLiveAgent, unique, without } from '@gantry/shared'
+import { assertAction, type Actor, type AgentControl, type Board, type EventInput, GANTRY, USER } from '../domain/board'
 import { findRepository, inferRepository } from '../domain/repositories'
-import { type Exec, shellCommand } from '../system/exec'
+import { type Exec, expandHome, shellCommand } from '../system/exec'
 
 export interface RunnerDeps {
   board: Board
@@ -52,7 +53,6 @@ export const slugify = (title: string) =>
     .slice(0, 40)
     .replace(/^-+|-+$/g, '') || 'task'
 
-export const expandHome = (path: string, home: string) => (path === '~' ? home : path.startsWith('~/') ? join(home, path.slice(2)) : path)
 
 const realPath = (path: string) => {
   try {

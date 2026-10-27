@@ -1,5 +1,5 @@
 import type { Actionable, Column, ColumnId, Link, PermissionPreset, Priority } from './actionable'
-import type { ApiTokenInfo, CreatedApiToken, OAuthProvider } from './api'
+import type { ApiTokenInfo, ConnectionStatus, CreatedApiToken, OAuthProvider } from './api'
 import type { ActivityEvent, ActivityQuery } from './events'
 import type { AgentEvent } from './provider'
 import type { Settings } from './settings'
@@ -67,7 +67,6 @@ export interface Repository {
   setupCommand?: string
 }
 
-export type ConnectionStatus = 'connected' | 'reconnect_required' | 'disconnected'
 
 export interface ConnectionInfo {
   provider: OAuthProvider | 'api'

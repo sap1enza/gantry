@@ -2,6 +2,8 @@ import type { PermissionPreset } from './actionable'
 import { DEFAULT_ENABLED_TRIGGERS, type TriggerId } from './triggers'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'openai_compatible'
+export const LLM_DEFAULT_MODELS: Record<LlmProvider, string> = { anthropic: 'claude-haiku-5-5', openai: 'gpt-5-mini', openai_compatible: '' }
+export const GMAIL_CATEGORIES = ['promotions', 'social', 'updates', 'forums'] as const
 export type WorkspaceCleanup = 'delete' | 'keep' | 'ask'
 export type Appearance = 'system' | 'light' | 'dark'
 
@@ -66,13 +68,13 @@ export const DEFAULT_SETTINGS: Settings = {
   email: {
     inboxOnly: true,
     unreadOnly: true,
-    excludeCategories: ['promotions', 'social', 'updates', 'forums'],
+    excludeCategories: [...GMAIL_CATEGORIES],
     domainAllow: [],
     domainDeny: [],
     labels: [],
     llmGate: false,
   },
-  llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
+  llm: { provider: 'anthropic', model: LLM_DEFAULT_MODELS.anthropic },
   notifications: { needsInput: true, completed: true, failed: true, newActionable: false },
   launchAtLogin: false,
   appearance: 'system',

@@ -32,6 +32,9 @@ import {
   type SourceKind,
   type TranscriptEntry,
   type TriggerId,
+  hasLiveAgent,
+  unique,
+  without,
 } from '@gantry/shared'
 import type { KeyValueStore } from '../contracts'
 import type { Db } from '../db'
@@ -70,13 +73,10 @@ export const GANTRY: Actor = { kind: 'gantry', name: 'Gantry' }
 const DAY_MS = 86_400_000
 const IN_PROGRESS_RANK: Partial<Record<AgentState, number>> = { awaiting_input: 0, running: 1, queued: 2, paused: 3 }
 
-export const unique = (xs: string[]) => [...new Set(xs)]
-export const without = (xs: string[], ...remove: string[]) => xs.filter((x) => !remove.includes(x))
 const dedupeKey = (kind: SourceKind, externalKey: string) => `${kind}:${externalKey}`
 const mergeLinks = (current: Link[], incoming: Link[]) => [...current, ...incoming.filter((l) => !current.some((c) => c.url === l.url))]
 const sourceActor = (signal: IngestSignal): Actor => ({ kind: 'source', name: signal.actor ?? signal.source.name })
 const insertAt = <T>(xs: T[], index: number, x: T) => xs.splice(Math.max(0, Math.min(index, xs.length)), 0, x)
-export const hasLiveAgent = (a: Pick<Actionable, 'column' | 'agentState'>) => a.column === 'in_progress' && a.agentState !== 'stopped'
 const INTERNAL_METADATA = ['aliasIds', 'autoStartOnRepository']
 const MAX_ALIASES = 20
 const externalMetadata = (m: Record<string, unknown> = {}) => Object.fromEntries(Object.entries(m).filter(([k]) => !INTERNAL_METADATA.includes(k)))
@@ -362,9 +362,9 @@ export class Board implements IngestSink {
     )
   }
 
-  dismiss(target: string) {
+  async dismiss(target: string) {
     const card = this.apiTarget(target, 'Dismiss')
-    if (card) void this.dismissCard(card.id, { kind: 'source', name: card.source.name }).catch((err) => console.error('dismiss failed', err))
+    if (card) await this.dismissCard(card.id, { kind: 'source', name: card.source.name })
   }
 
   async dismissCard(id: string, actor: Actor) {

@@ -1,3 +1,4 @@
+import type { SourceKind } from './actionable'
 import type { OAuthProvider } from './api'
 
 export const SECRET_KEYS = {
@@ -15,3 +16,5 @@ export const DEEP_LINKS = {
   actionable: (id: string) => `gantry://actionable/${id}`,
   authComplete: (code: string) => `gantry://auth/complete?code=${encodeURIComponent(code)}`,
 } as const
+
+export const PROVIDER_SOURCE: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }

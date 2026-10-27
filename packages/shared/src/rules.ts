@@ -1,4 +1,4 @@
-import type { Actionable, ColumnId } from './actionable'
+import { FIXED_COLUMNS, type Actionable, type ColumnId } from './actionable'
 
 export type CardAction =
   | 'start'
@@ -12,12 +12,14 @@ export type CardAction =
   | 'open_terminal'
   | 'reopen_todo'
 
-const FIXED = new Set(['todo', 'in_progress', 'review', 'done'])
+const FIXED = new Set<string>(FIXED_COLUMNS)
 export const isCustomColumn = (column: ColumnId) => !FIXED.has(column)
 
 export function isAgentActive(a: Pick<Actionable, 'column' | 'agentState'>) {
   return a.column === 'in_progress' && (a.agentState === 'running' || a.agentState === 'awaiting_input')
 }
+
+export const hasLiveAgent = (a: Pick<Actionable, 'column' | 'agentState'>) => a.column === 'in_progress' && a.agentState !== 'stopped'
 
 export function actionsFor(a: Actionable): CardAction[] {
   if (a.dismissedAt || a.archivedAt) return []

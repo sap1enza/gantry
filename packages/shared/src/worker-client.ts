@@ -14,7 +14,6 @@ export class WorkerError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly retryAfterSeconds?: number,
   ) {
     super(message)
   }
@@ -46,8 +45,7 @@ export class WorkerClient {
       signal: AbortSignal.timeout(20_000),
     })
     if (!res.ok) {
-      const retry = res.headers.get('retry-after')
-      throw new WorkerError(res.status, await res.text(), retry ? Number(retry) : undefined)
+      throw new WorkerError(res.status, await res.text())
     }
     return (res.status === 204 ? undefined : await res.json()) as T
   }
@@ -64,8 +62,8 @@ export class WorkerClient {
   deleteMe() {
     return this.request<void>('DELETE', '/v1/me')
   }
-  inbox(limit = 100) {
-    return this.request<InboxResponse>('GET', `/v1/inbox?limit=${limit}`)
+  inbox() {
+    return this.request<InboxResponse>('GET', '/v1/inbox')
   }
   ack(ids: string[]) {
     return this.request<void>('POST', '/v1/inbox/ack', { ids })

@@ -1,7 +1,8 @@
 import { COMPLETION_INSTRUCTIONS, TAGS } from '@gantry/shared'
 import { describe, expect, it, vi } from 'vitest'
 import { flush, setup, signal } from '../domain/testing'
-import { expandHome, slugify } from './runner'
+import { expandHome } from '../system/exec'
+import { slugify } from './runner'
 
 const card = (s: ReturnType<typeof setup>, n = 1) =>
   s.board.ingest(signal({ externalKey: `https://github.com/acme/api/pull/${n}`, title: `Fix CI ${n}` })).actionableId!

@@ -30,7 +30,7 @@ export interface Ingestion {
   connections(): ConnectionInfo[]
   connect(provider: OAuthProvider): Promise<void>
   disconnect(provider: OAuthProvider): Promise<void>
-  manageAccessUrl(provider: OAuthProvider): string | undefined
+  manageAccessUrl(provider: OAuthProvider): string
   githubRepositories(): Promise<{ fullName: string; selected: boolean }[]>
   fetchContext(actionable: Actionable): Promise<string | undefined>
   onConnectionsChanged(listener: () => void): () => void
