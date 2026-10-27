@@ -43,6 +43,7 @@ export class WorkerClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
     })
     if (!res.ok) {
       const retry = res.headers.get('retry-after')
