@@ -119,9 +119,14 @@ export const deleteUser = (db: D1Database, userId: string) => db.prepare('DELETE
 
 export async function mergeUsers(db: D1Database, fromUserId: string, intoUserId: string) {
   if (fromUserId === intoUserId) return
+  // shortcut: grants the target already has are dropped without provider revocation, revoke them once multi-device merges are common
+  const from = await db.prepare('SELECT email, github_id, github_login FROM users WHERE id = ?').bind(fromUserId).first<Record<string, string | null>>()
   await db.batch([
     ...USER_TABLES.map((table) => db.prepare(`UPDATE OR IGNORE ${table} SET user_id = ?1 WHERE user_id = ?2`).bind(intoUserId, fromUserId)),
     deleteUser(db, fromUserId),
+    db
+      .prepare('UPDATE users SET email = COALESCE(email, ?), github_id = COALESCE(github_id, ?), github_login = COALESCE(github_login, ?) WHERE id = ?')
+      .bind(from?.email ?? null, from?.github_id ?? null, from?.github_login ?? null, intoUserId),
   ])
 }
 

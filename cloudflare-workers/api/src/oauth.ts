@@ -60,6 +60,8 @@ export function authorizeUrl(env: Env, provider: OAuthStartProvider, state: stri
   return url.toString()
 }
 
+export class OAuthRejected extends Error {}
+
 async function requestTokens(fetchImpl: typeof fetch, env: Env, provider: OAuthProvider, params: Record<string, string>) {
   const { tokenUrl, clientId, clientSecret } = providerConfig(env, provider)
   const res = await fetchImpl(tokenUrl, {
@@ -69,8 +71,9 @@ async function requestTokens(fetchImpl: typeof fetch, env: Env, provider: OAuthP
   })
   const data = (await res.json().catch(() => ({}))) as Record<string, any>
   const t = provider === 'slack' && data.authed_user?.access_token ? data.authed_user : data
+  if (res.status >= 500) throw new Error(`${provider} token endpoint unavailable: ${res.status}`)
   if (!res.ok || data.error || data.ok === false || typeof t.access_token !== 'string') {
-    throw new Error(`${provider} token request failed: ${data.error ?? res.status}`)
+    throw new OAuthRejected(`${provider} token request failed: ${data.error ?? res.status}`)
   }
   const tokens: TokenSet = {
     accessToken: t.access_token,

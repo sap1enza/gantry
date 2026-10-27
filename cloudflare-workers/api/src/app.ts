@@ -18,7 +18,7 @@ import { validator } from 'hono/validator'
 import { z } from 'zod'
 import { hmacSha256Hex, randomToken, sha256, timingSafeEqual } from './crypto'
 import type { AppEnv } from './env'
-import { authorizeUrl, exchangeCode, GRANT_PROVIDERS, OAUTH_PROVIDERS, refreshTokens, revokeGrant, type OAuthStartProvider } from './oauth'
+import { authorizeUrl, exchangeCode, GRANT_PROVIDERS, OAuthRejected, OAUTH_PROVIDERS, refreshTokens, revokeGrant, type OAuthStartProvider } from './oauth'
 import {
   addRoutingKey,
   decryptGrant,
@@ -39,6 +39,8 @@ const EMAIL_LINK_TTL_MS = 15 * 60 * 1000
 const REFRESH_SKEW_MS = 5 * 60 * 1000
 const SLACK_REPLAY_WINDOW_S = 5 * 60
 const EMAIL_SENDS_PER_MINUTE = 5
+const API_BODY_LIMIT = 64 * 1024
+const WEBHOOK_BODY_LIMIT = 1024 * 1024
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(100) })
 const ackSchema = z.object({ ids: z.array(z.string()).max(1000) })
@@ -54,6 +56,14 @@ const SAMPLE_ACTIONABLE: CreateActionableRequest = {
 }
 
 type Ctx = Context<AppEnv>
+
+const parseJsonOrNull = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
 
 const tooMany = (c: Ctx, retryAfter: number) => c.json({ error: 'rate_limited' }, 429, { 'retry-after': String(retryAfter) })
 
@@ -82,7 +92,11 @@ const toTokenInfo = (r: Record<string, string | null>): ApiTokenInfo => ({
 export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input, init)) {
   const app = new Hono<AppEnv>()
 
-  app.use(bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'payload_too_large' }, 413) }))
+  const tooLarge = (c: Ctx) => c.json({ error: 'payload_too_large' }, 413)
+  const apiBodyLimit = bodyLimit({ maxSize: API_BODY_LIMIT, onError: tooLarge })
+  const webhookBodyLimit = bodyLimit({ maxSize: WEBHOOK_BODY_LIMIT, onError: tooLarge })
+  app.use((c, next) => (c.req.path.startsWith('/webhooks/') ? webhookBodyLimit : apiBodyLimit)(c, next))
+  app.get('/health', (c) => c.json({ ok: true }))
 
   const deviceAuth = createMiddleware<AppEnv>(async (c, next) => {
     const match = /^Device ([^:\s]+):(\S+)$/.exec(c.req.header('authorization') ?? '')
@@ -287,13 +301,19 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     let expiresAt = row.expires_at ?? undefined
     if (row.expires_at && Date.parse(row.expires_at) - Date.now() < REFRESH_SKEW_MS) {
       try {
-        if (!grant.refreshToken) throw new Error('no refresh token')
+        if (!grant.refreshToken) throw new OAuthRejected('no refresh token')
         const refreshed = await refreshTokens(fetchImpl, c.env, provider, grant.refreshToken)
         await updateGrantTokens(c.env, userId, provider, refreshed)
         accessToken = refreshed.accessToken
         expiresAt = refreshed.expiresAt
       } catch (err) {
         console.error(err)
+        if (!(err instanceof OAuthRejected)) return c.json({ error: 'provider_unavailable' }, 502)
+        const latest = await getGrant(c.env.DB, userId, provider)
+        if (latest && latest.status === 'connected' && latest.refresh_token !== row.refresh_token) {
+          const rotated = await decryptGrant(c.env, latest)
+          return c.json({ provider, accessToken: rotated.accessToken, expiresAt: latest.expires_at ?? undefined, account: rotated.account, scopes: rotated.scopes } satisfies GrantTokenResponse)
+        }
         await c.env.DB.prepare("UPDATE grants SET status = 'reconnect_required' WHERE user_id = ? AND provider = ?").bind(userId, provider).run()
         await enqueue(c.env.DB, [userId], { kind: 'connection', provider, status: 'reconnect_required', account: grant.account })
         return c.json({ error: 'reconnect_required' }, 409)
@@ -353,7 +373,8 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const raw = await c.req.text()
     const expected = `sha256=${await hmacSha256Hex(c.env.GITHUB_WEBHOOK_SECRET, raw)}`
     if (!(await timingSafeEqual(c.req.header('x-hub-signature-256') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
-    const payload = JSON.parse(raw) as { action?: string; installation?: { id: number }; sender?: { id: number } }
+    const payload = parseJsonOrNull(raw) as { action?: string; installation?: { id: number }; sender?: { id: number } } | null
+    if (!payload) return c.json({ error: 'invalid_json' }, 400)
     const event = c.req.header('x-github-event') ?? 'unknown'
     const installationKey = payload.installation && `installation:${payload.installation.id}`
     if (!installationKey) return c.json({ delivered: 0 })
@@ -371,7 +392,8 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > SLACK_REPLAY_WINDOW_S) return c.json({ error: 'stale_request' }, 401)
     const expected = `v0=${await hmacSha256Hex(c.env.SLACK_SIGNING_SECRET, `v0:${timestamp}:${raw}`)}`
     if (!(await timingSafeEqual(c.req.header('x-slack-signature') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
-    const payload = JSON.parse(raw) as { type?: string; challenge?: string; authorizations?: { team_id: string; user_id: string }[] }
+    const payload = parseJsonOrNull(raw) as { type?: string; challenge?: string; authorizations?: { team_id: string; user_id: string }[] } | null
+    if (!payload) return c.json({ error: 'invalid_json' }, 400)
     if (payload.type === 'url_verification') return c.json({ challenge: payload.challenge })
     // shortcut: Slack only includes one authorization per event, call apps.event.authorizations.list when several Gantry users share a channel
     const keys = (payload.authorizations ?? []).map((a) => `${a.team_id}:${a.user_id}`)

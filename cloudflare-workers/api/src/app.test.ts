@@ -160,6 +160,12 @@ describe('hardening', () => {
     expect(res.status).toBe(413)
   })
 
+  it('allows webhook bodies over 64 KB', async () => {
+    const body = JSON.stringify({ installation: { id: 1 }, blob: 'a'.repeat(100 * 1024) })
+    const res = await call('/webhooks/github', { method: 'POST', body, headers: { 'x-hub-signature-256': `sha256=${await hmacSha256Hex('gh-hook', body)}` } })
+    expect(res.status).toBe(200)
+  })
+
   it('scheduled cleanup deletes expired inbox items', async () => {
     const { auth, userId } = await registerDevice()
     await env.DB.prepare("INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES ('old', ?, '{}', '2000-01-01', '2000-01-31')").bind(userId).run()
@@ -202,6 +208,16 @@ describe('oauth', () => {
     expect(merged).toMatchObject({ githubLogin: 'ada', signedIn: true })
   })
 
+  it('merging keeps the email of the merged-away user', async () => {
+    const first = await registerDevice()
+    const second = await registerDevice()
+    await env.DB.prepare("UPDATE users SET email = 'b@x.test' WHERE id = ?").bind(second.userId).run()
+    mockGithubOAuth()
+    await connect(first.auth, 'github_signin')
+    await connect(second.auth, 'github_signin')
+    expect(await me(first.auth)).toMatchObject({ email: 'b@x.test', githubLogin: 'ada' })
+  })
+
   it('returns the stored token while it is fresh', async () => {
     const { auth } = await registerDevice()
     mockGithubOAuth()
@@ -229,6 +245,29 @@ describe('oauth', () => {
     expect((await call('/v1/grants/github/refresh', { method: 'POST', auth })).status).toBe(409)
     expect((await me(auth)).grants[0]!.status).toBe('reconnect_required')
     expect((await inbox(auth)).at(-1)!.payload).toMatchObject({ kind: 'connection', provider: 'github', status: 'reconnect_required' })
+  })
+
+  it('keeps the grant connected when the provider is temporarily unavailable', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth(undefined, { expires_in: 60 })
+    await connect(auth, 'github')
+    fetchMock.mockResolvedValueOnce(new Response('down', { status: 503 }))
+    expect((await call('/v1/grants/github/refresh', { method: 'POST', auth })).status).toBe(502)
+    expect((await me(auth)).grants[0]!.status).toBe('connected')
+  })
+
+  it('returns the rotated token when a concurrent refresh already used the refresh token', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth(undefined, { expires_in: 60 })
+    await connect(auth, 'github')
+    fetchMock.mockResolvedValueOnce(json({ access_token: 'gho_first', refresh_token: 'ghr_2', expires_in: 28800 }))
+    fetchMock.mockResolvedValueOnce(json({ error: 'bad_refresh_token' }))
+    const [a, b] = await Promise.all([
+      call('/v1/grants/github/refresh', { method: 'POST', auth }),
+      call('/v1/grants/github/refresh', { method: 'POST', auth }),
+    ])
+    expect([a.status, b.status]).toEqual([200, 200])
+    expect((await me(auth)).grants[0]!.status).toBe('connected')
   })
 
   it('DELETE /v1/me revokes grants at the provider and wipes the user', async () => {
@@ -280,6 +319,10 @@ describe('github webhook', () => {
     await connect(auth, 'github')
     const install = JSON.stringify({ action: 'created', installation: { id: 99 }, sender: { id: 7 } })
     expect(await (await deliver(install, `sha256=${await hmacSha256Hex('gh-hook', install)}`, 'installation')).json()).toEqual({ delivered: 1 })
+  })
+
+  it('rejects a signed non-JSON body with 400', async () => {
+    expect((await deliver('payload=x', `sha256=${await hmacSha256Hex('gh-hook', 'payload=x')}`)).status).toBe(400)
   })
 
   it('rejects a bad signature', async () => {
