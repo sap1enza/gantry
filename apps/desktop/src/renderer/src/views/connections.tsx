@@ -184,7 +184,8 @@ const triggersFor = (source: string) => (Object.keys(TRIGGERS) as TriggerId[]).f
 function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settings }) {
   const pop = usePopover()
   const [repos, setRepos] = useState<{ fullName: string; selected: boolean }[]>([])
-  useEffect(() => void (info.status === 'connected' && api.connections.githubRepositories().then(setRepos)), [info.status])
+  const loadRepos = () => void (info.status === 'connected' && api.connections.githubRepositories().then(setRepos))
+  useEffect(loadRepos, [info.status])
   const selected = settings.github.repositories
   const setGithub = useSection(settings, 'github')
   return (
@@ -193,7 +194,7 @@ function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settin
         <hr />
         <div className="row">
           <span className="eyebrow">Create actionables for</span>
-          <a className="small" style={{ marginLeft: 'auto' }} onClick={(e) => pop.toggle(e.currentTarget)}>
+          <a className="small" style={{ marginLeft: 'auto' }} onClick={(e) => { if (!pop.anchor) loadRepos(); pop.toggle(e.currentTarget) }}>
             Repositories: {selected.length} selected <ArrowUpRight size={11} />
           </a>
           {pop.anchor && (
