@@ -39,7 +39,8 @@ describe('db', () => {
     const s = settings.get()
     expect(s.maxConcurrentAgents).toBe(1)
     expect(s.notifications).toEqual({ needsInput: true, completed: true, failed: true, newActionable: true })
-    s.maxConcurrentAgents = 99
+    expect(() => (s.maxConcurrentAgents = 99)).toThrow(TypeError)
+    expect(() => (s.notifications.completed = false)).toThrow(TypeError)
     expect(settings.get().maxConcurrentAgents).toBe(1)
     expect(settings.update({ maxConcurrentAgents: 2 }).maxConcurrentAgents).toBe(2)
   })
