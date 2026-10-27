@@ -3,6 +3,7 @@ import { convertV4MiniflareOptions, Miniflare } from 'miniflare'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import init from '../migrations/0001_init.sql?raw'
 import completionCodes from '../migrations/0002_completion_codes.sql?raw'
+import webhookDeliveries from '../migrations/0003_webhook_deliveries.sql?raw'
 import { createApp } from './app'
 import { hmacSha256Hex } from './crypto'
 import type { Env } from './env'
@@ -29,15 +30,20 @@ async function createToken(auth: string) {
 }
 
 const inbox = async (auth: string) => ((await (await call('/v1/inbox', { auth })).json()) as InboxResponse).items
+const routingKeys = async (userId: string) =>
+  JSON.parse((await env.DB.prepare("SELECT routing_keys FROM grants WHERE user_id = ? AND provider = 'github'").bind(userId).first<string>('routing_keys'))!) as string[]
 const me = async (auth: string) => (await (await call('/v1/me', { auth })).json()) as MeResponse
 
-function mockGithubOAuth(account = { id: 7, login: 'ada' }, tokenOverrides: Record<string, unknown> = {}) {
+function mockGithubOAuth(account = { id: 7, login: 'ada' }, tokenOverrides: Record<string, unknown> = {}, installations = [{ id: 42 }]) {
   fetchMock.mockImplementation(async (input) => {
     const url = String(input)
     if (url.startsWith('https://github.com/login/oauth/access_token'))
       return json({ access_token: 'gho_access', refresh_token: 'ghr_refresh', expires_in: 28800, ...tokenOverrides })
     if (url === 'https://api.github.com/user') return json({ ...account, avatar_url: 'https://avatars/x' })
-    if (url === 'https://api.github.com/user/installations') return json({ installations: [{ id: 42 }] })
+    if (url.startsWith('https://api.github.com/user/installations?')) {
+      const page = Number(new URL(url).searchParams.get('page'))
+      return json({ installations: installations.slice((page - 1) * 100, page * 100) })
+    }
     throw new Error(`unexpected fetch ${url}`)
   })
 }
@@ -65,7 +71,7 @@ beforeAll(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {}', d1Databases: ['DB'] }))
   const DB = await mf.getD1Database('DB')
   await DB.batch(
-    [init, completionCodes]
+    [init, completionCodes, webhookDeliveries]
       .join(';')
       .split(';')
       .map((s) => s.trim())
@@ -93,7 +99,7 @@ afterAll(() => mf.dispose())
 beforeEach(async () => {
   fetchMock.mockReset()
   await env.DB.batch(
-    ['inbox', 'grants', 'api_tokens', 'completion_codes', 'devices', 'oauth_states', 'email_links', 'rate_limits', 'users'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
+    ['inbox', 'webhook_deliveries', 'grants', 'api_tokens', 'completion_codes', 'devices', 'oauth_states', 'email_links', 'rate_limits', 'users'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   )
 })
 
@@ -166,6 +172,28 @@ describe('hardening', () => {
     const limited = await call('/v1/inbox', { auth })
     expect(limited.status).toBe(429)
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+  })
+
+  it('limits device registrations to 10 per hour per IP', async () => {
+    const register = (ip: string) => call('/v1/devices', { method: 'POST', body: JSON.stringify({ name: 'x' }), headers: { 'cf-connecting-ip': ip } })
+    for (let i = 0; i < 10; i++) expect((await register('1.1.1.1')).status).toBe(201)
+    const limited = await register('1.1.1.1')
+    expect(limited.status).toBe(429)
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect((await register('2.2.2.2')).status).toBe(201)
+  })
+
+  it('caps the inbox response near 4 MB but always returns one item', async () => {
+    const { auth, userId } = await registerDevice()
+    const insert = (id: string, size: number) =>
+      env.DB.prepare("INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES (?, ?, ?, ?, '2999-01-01')")
+        .bind(id, userId, JSON.stringify({ kind: 'slack.event', payload: { blob: 'a'.repeat(size) } }), `2026-01-01T00:00:0${id}`)
+        .run()
+    for (const id of ['1', '2', '3', '4']) await insert(id, 1_100_000)
+    expect((await inbox(auth)).map((i) => i.id)).toEqual(['1', '2', '3'])
+    await env.DB.prepare("DELETE FROM inbox WHERE id IN ('1', '2', '3')").run()
+    await insert('0', 1_000)
+    expect((await inbox(auth)).map((i) => i.id)).toEqual(['0', '4'])
   })
 
   it('rejects bodies over 64 KB with 413', async () => {
@@ -259,10 +287,30 @@ describe('oauth', () => {
     expect((await me(auth)).grants[0]!.status).toBe('reconnect_required')
   })
 
-  it('requests search:read in the Slack user scopes', async () => {
+  it('requests search and conversation read scopes in the Slack user scopes', async () => {
     const { auth } = await registerDevice()
     const { url } = (await (await call('/oauth/slack/start', { method: 'POST', auth })).json()) as { url: string }
-    expect(new URL(url).searchParams.get('user_scope')!.split(',')).toContain('search:read')
+    expect(new URL(url).searchParams.get('user_scope')!.split(',')).toEqual(
+      expect.arrayContaining(['search:read', 'channels:read', 'groups:read', 'im:read', 'mpim:read']),
+    )
+  })
+
+  it('routes every page of the user installations to a new GitHub grant', async () => {
+    const { auth, userId } = await registerDevice()
+    mockGithubOAuth(undefined, {}, Array.from({ length: 101 }, (_, i) => ({ id: i + 1 })))
+    await connect(auth, 'github')
+    const keys = await routingKeys(userId)
+    expect(keys).toHaveLength(102)
+    expect(keys).toEqual(expect.arrayContaining(['user:7', 'installation:1', 'installation:101']))
+  })
+
+  it('re-lists installations when the GitHub token refreshes', async () => {
+    const { auth, userId } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github')
+    mockGithubOAuth(undefined, {}, [{ id: 42 }, { id: 77 }])
+    await call('/v1/grants/github/refresh?force=1', { method: 'POST', auth })
+    expect(await routingKeys(userId)).toEqual(['user:7', 'installation:42', 'installation:77'])
   })
 
   it('refreshes a token that is near expiry without exposing the refresh token', async () => {
@@ -273,7 +321,8 @@ describe('oauth', () => {
     const body = (await (await call('/v1/grants/github/refresh', { method: 'POST', auth })).json()) as Record<string, unknown>
     expect(body.accessToken).toBe('gho_new')
     expect(JSON.stringify(body)).not.toContain('ghr_')
-    expect(new URLSearchParams(String(fetchMock.mock.lastCall![1]!.body)).get('refresh_token')).toBe('ghr_refresh')
+    const refreshCall = fetchMock.mock.calls.findLast(([url]) => String(url).startsWith('https://github.com/login/oauth/access_token'))!
+    expect(new URLSearchParams(String(refreshCall[1]!.body)).get('refresh_token')).toBe('ghr_refresh')
   })
 
   it('marks the grant reconnect_required when refresh fails', async () => {
@@ -402,6 +451,27 @@ describe('github webhook', () => {
     expect(await (await deliver(install, `sha256=${await hmacSha256Hex('gh-hook', install)}`, 'installation')).json()).toEqual({ delivered: 1 })
   })
 
+  it('routes an org installation by another sender to members who can access it', async () => {
+    const { auth, userId } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github')
+    mockGithubOAuth(undefined, {}, [{ id: 42 }, { id: 99 }])
+    const install = JSON.stringify({ action: 'added', installation: { id: 99 }, sender: { id: 1 } })
+    await deliver(install, `sha256=${await hmacSha256Hex('gh-hook', install)}`, 'installation_repositories')
+    expect(await routingKeys(userId)).toContain('installation:99')
+  })
+
+  it('ignores a delivery id it already enqueued', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github')
+    const body = JSON.stringify({ action: 'completed', installation: { id: 42 } })
+    const signature = `sha256=${await hmacSha256Hex('gh-hook', body)}`
+    expect(await (await deliver(body, signature)).json()).toEqual({ delivered: 1 })
+    expect(await (await deliver(body, signature)).json()).toEqual({ delivered: 0 })
+    expect((await inbox(auth)).filter((i) => i.payload.kind === 'github.webhook')).toHaveLength(1)
+  })
+
   it('rejects a signed non-JSON body with 400', async () => {
     expect((await deliver('payload=x', `sha256=${await hmacSha256Hex('gh-hook', 'payload=x')}`)).status).toBe(400)
   })
@@ -441,6 +511,15 @@ describe('slack webhook', () => {
     const payload = { type: 'event_callback', authorizations: [{ team_id: 'T1', user_id: 'U1' }], event: { type: 'message', text: 'hi <@U1>' } }
     expect(await (await send(payload)).json()).toEqual({ delivered: 1 })
     expect((await inbox(auth)).at(-1)!.payload).toEqual({ kind: 'slack.event', payload })
+  })
+
+  it('ignores a retried event_id', async () => {
+    const { auth } = await registerDevice()
+    await connectSlack(auth)
+    const payload = { type: 'event_callback', event_id: 'Ev1', authorizations: [{ team_id: 'T1', user_id: 'U1' }], event: { type: 'message' } }
+    expect(await (await send(payload)).json()).toEqual({ delivered: 1 })
+    expect(await (await send(payload)).json()).toEqual({ delivered: 0 })
+    expect((await inbox(auth)).filter((i) => i.payload.kind === 'slack.event')).toHaveLength(1)
   })
 
   it('rejects a bad signature', async () => {

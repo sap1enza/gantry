@@ -33,7 +33,7 @@ const providerConfig = (env: Env, provider: OAuthProvider) =>
       tokenUrl: 'https://slack.com/api/oauth.v2.access',
       clientId: env.SLACK_CLIENT_ID,
       clientSecret: env.SLACK_CLIENT_SECRET,
-      authorizeParams: { user_scope: 'channels:history,groups:history,im:history,mpim:history,search:read,users:read' },
+      authorizeParams: { user_scope: 'channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,search:read,users:read' },
     },
     google: {
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -95,9 +95,14 @@ async function githubIdentity(fetchImpl: typeof fetch, accessToken: string) {
   return { id: String(user.id), login: user.login, name: user.name ?? undefined, avatarUrl: user.avatar_url } satisfies GrantAccount
 }
 
-async function githubInstallationKeys(fetchImpl: typeof fetch, accessToken: string) {
-  const data = await getJson(fetchImpl, 'https://api.github.com/user/installations', accessToken, GITHUB_HEADERS)
-  return (data.installations ?? []).map((i: { id: number }) => `installation:${i.id}`) as string[]
+export async function githubInstallationKeys(fetchImpl: typeof fetch, accessToken: string) {
+  const keys: string[] = []
+  for (let page = 1; ; page++) {
+    const data = await getJson(fetchImpl, `https://api.github.com/user/installations?per_page=100&page=${page}`, accessToken, GITHUB_HEADERS)
+    const installations: { id: number }[] = data.installations ?? []
+    keys.push(...installations.map((i) => `installation:${i.id}`))
+    if (installations.length < 100) return keys
+  }
 }
 
 export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: OAuthStartProvider, code: string): Promise<ExchangeResult> {
