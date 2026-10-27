@@ -95,7 +95,7 @@ const completeSchema = z.object({ code: z.string().trim().min(1).max(128) })
 
 type PendingAuth =
   | { kind: 'grant'; provider: OAuthProvider; result: ExchangeResult }
-  | { kind: 'github_signin'; account: GrantAccount }
+  | { kind: 'github_signin'; result: ExchangeResult }
   | { kind: 'email'; email: string }
 
 const SAMPLE_ACTIONABLE: CreateActionableRequest = {
@@ -360,7 +360,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
       console.error(err)
       return page(c, 'Connection failed. Try again from Gantry.', 502)
     }
-    return issueCompletionCode(c, stored.device_id, provider === 'github_signin' ? { kind: 'github_signin', account: result.account } : { kind: 'grant', provider, result })
+    return issueCompletionCode(c, stored.device_id, provider === 'github_signin' ? { kind: 'github_signin', result } : { kind: 'grant', provider, result })
   })
 
   app.post('/auth/complete', deviceAuth, json(completeSchema), async (c) => {
@@ -376,9 +376,13 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
       return c.json({ kind: 'grant', provider: pending.provider } satisfies AuthCompletion)
     }
     if (pending.kind === 'github_signin') {
-      const existing = await c.env.DB.prepare('SELECT id FROM users WHERE github_id = ?').bind(pending.account.id).first<{ id: string }>()
+      const { account } = pending.result
+      const existing = await c.env.DB.prepare('SELECT id FROM users WHERE github_id = ?').bind(account.id).first<{ id: string }>()
       if (existing) await mergeUsers(c.env.DB, userId, existing.id)
-      await c.env.DB.prepare('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?').bind(pending.account.id, pending.account.login, existing?.id ?? userId).run()
+      const signedInUserId = existing?.id ?? userId
+      await c.env.DB.prepare('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?').bind(account.id, account.login, signedInUserId).run()
+      await saveGrant(c.env, signedInUserId, 'github', pending.result)
+      await enqueue(c.env.DB, [signedInUserId], { kind: 'connection', provider: 'github', status: 'connected', account })
     } else {
       const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(pending.email).first<{ id: string }>()
       if (existing) await mergeUsers(c.env.DB, userId, existing.id)

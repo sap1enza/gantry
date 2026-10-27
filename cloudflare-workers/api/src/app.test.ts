@@ -274,6 +274,14 @@ describe('oauth', () => {
     expect(merged).toMatchObject({ githubLogin: 'ada', signedIn: true })
   })
 
+  it('github_signin also connects GitHub', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github_signin')
+    expect(await (await call('/v1/grants/github/refresh', { method: 'POST', auth })).json()).toMatchObject({ provider: 'github', accessToken: 'gho_access' })
+    expect((await inbox(auth)).map((i) => i.payload)).toContainEqual(expect.objectContaining({ kind: 'connection', provider: 'github', status: 'connected' }))
+  })
+
   it('merging keeps the email of the merged-away user', async () => {
     const first = await registerDevice()
     const second = await registerDevice()
