@@ -15,6 +15,7 @@ function api(s = setup(), workerFetch?: typeof fetch, ingestion?: Partial<Ingest
     chooseDirectory: vi.fn(async () => '/code/web/src'),
     saveFile: vi.fn(async () => undefined),
     wipe: () => order.push('wipe'),
+    alert: vi.fn(async () => undefined),
     relaunch: () => order.push('relaunch'),
   }
   const gantry = createApi({
@@ -90,8 +91,20 @@ describe('api', () => {
       return new Response(null, { status: 204 })
     })
     await gantry.system.deleteAllData()
-    expect(order).toEqual(['stop', `removed git -C /code/api worktree remove ${path}`, 'worker /v1/me', 'wipe', 'relaunch'])
+    expect(order).toEqual(['stop', `removed git -C /code/api worktree remove --force ${path}`, 'worker /v1/me', 'wipe', 'relaunch'])
     expect(secrets.get('device')).toBeUndefined()
+  })
+
+  it('deleteAllData still wipes locally and tells the user when the worker delete fails', async () => {
+    const workerFetch = vi.fn(async (url: URL) =>
+      url.pathname === '/v1/devices' ? Response.json({ deviceId: 'd1', deviceSecret: 'x', userId: 'u1' }) : new Response(null, { status: 204 }),
+    )
+    const { gantry, order, account, platform } = api(setup(), workerFetch as unknown as typeof fetch)
+    await account.setName('Lucas')
+    workerFetch.mockImplementation(async () => new Response('down', { status: 503 }))
+    await gantry.system.deleteAllData()
+    expect(order).toEqual(['wipe', 'relaunch'])
+    expect(platform.alert).toHaveBeenCalledWith('Remote data could not be deleted', expect.stringContaining('Local data was deleted'))
   })
 })
 

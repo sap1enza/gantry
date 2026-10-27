@@ -20,6 +20,7 @@ export interface Platform {
   chooseDirectory(title: string): Promise<string | undefined>
   saveFile(defaultName: string): Promise<string | undefined>
   wipe(): void
+  alert(message: string, detail: string): Promise<void>
   relaunch(): void
 }
 
@@ -79,7 +80,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       get: async (id) => board.resolveTarget(id),
       search: async (query) => board.search(query),
       create: async (input) => board.create(input),
-      move: async (id, column, position) => board.move(id, column, position),
+      move: (id, column, position) => runner.move(id, column, position),
       dispatchPreview: (id) => runner.preview(id),
       start: (id, overrides) => runner.start(id, overrides),
       pause: (id) => runner.pause(id),
@@ -202,12 +203,20 @@ export function createApi(deps: ApiDeps): GantryApi {
         deps.ingestion?.stop()
         await runner.stopAll()
         await runner.removeAllWorktrees()
-        await account
+        const remoteError = await account
           .worker()
           ?.deleteMe()
-          .catch((err) => console.error('worker delete failed', err))
+          .then(
+            () => undefined,
+            (err: Error) => err,
+          )
         deps.secrets.clear()
         platform.wipe()
+        if (remoteError)
+          await platform.alert(
+            'Remote data could not be deleted',
+            `Local data was deleted, but the Gantry Worker did not confirm deleting your account (${remoteError.message}). Revoke Gantry's GitHub, Slack and Google access from those services to cut it off.`,
+          )
         platform.relaunch()
       },
       openExternal,

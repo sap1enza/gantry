@@ -87,12 +87,12 @@ describe('AccountService', () => {
 })
 
 describe('loginItemSync', () => {
-  it('skips the default off value, applies changes once, and logs failures once', () => {
+  it('skips the current OS value, applies changes once, and logs failures once', () => {
     const set = vi.fn((on: boolean) => {
       if (on) throw new Error('Operation not permitted')
     })
     const log = vi.fn()
-    const sync = loginItemSync(set, log)
+    const sync = loginItemSync(set, false, log)
     sync(false)
     expect(set).not.toHaveBeenCalled()
     sync(true)
@@ -101,5 +101,11 @@ describe('loginItemSync', () => {
     sync(true)
     expect(set.mock.calls).toEqual([[true], [false], [true]])
     expect(log).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears an item that is already on at login when the setting is off', () => {
+    const set = vi.fn()
+    loginItemSync(set, true)(false)
+    expect(set).toHaveBeenCalledWith(false)
   })
 })

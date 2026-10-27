@@ -117,7 +117,7 @@ function main() {
     if (p.type === 'board.changed') updateBadge()
     if (p.type === 'activity.appended') notify(p.event)
   }
-  const syncLoginItem = loginItemSync((openAtLogin) => app.setLoginItemSettings({ openAtLogin }))
+  const syncLoginItem = loginItemSync((openAtLogin) => app.setLoginItemSettings({ openAtLogin }), app.getLoginItemSettings().openAtLogin)
   const applySettings = (s: Settings) => {
     syncLoginItem(s.launchAtLogin)
     nativeTheme.themeSource = s.appearance
@@ -189,6 +189,9 @@ function main() {
       wipe() {
         db.close()
         for (const suffix of ['', '-wal', '-shm']) rmSync(dbPath + suffix, { force: true })
+      },
+      async alert(message, detail) {
+        await dialog.showMessageBox({ type: 'warning', message, detail })
       },
       relaunch() {
         app.relaunch()

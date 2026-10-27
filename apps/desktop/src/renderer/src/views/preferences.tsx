@@ -30,6 +30,8 @@ function Group({ title, sub, children, className = 'rows' }: { title: string; su
   )
 }
 
+const LLM_DEFAULT_MODEL: Record<LlmProvider, string> = { anthropic: 'claude-haiku-5-5', openai: 'gpt-5-mini', openai_compatible: '' }
+
 export function PreferencesView() {
   const app = useApp()
   const s = app.settings
@@ -187,15 +189,17 @@ export function PreferencesView() {
                     { value: 'openai', label: 'OpenAI' },
                     { value: 'openai_compatible', label: 'OpenAI-compatible URL' },
                   ]}
-                  onChange={(v) => set({ llm: { ...s.llm, provider: v } })}
+                  onChange={(v) => v !== s.llm.provider && set({ llm: { ...s.llm, provider: v, model: LLM_DEFAULT_MODEL[v] } })}
                 />
               </Row>
               <Row title="Model">
-                <input className="field mono" style={{ width: 220 }} aria-label="Model id" defaultValue={s.llm.model} key={s.llm.model} onBlur={(e) => e.target.value.trim() && e.target.value !== s.llm.model && set({ llm: { ...s.llm, model: e.target.value.trim() } })} />
+                <input className="field mono" style={{ width: 220 }} aria-label="Model id" required placeholder="model-id" defaultValue={s.llm.model} key={s.llm.model} onBlur={(e) => e.target.value.trim() && e.target.value !== s.llm.model && set({ llm: { ...s.llm, model: e.target.value.trim() } })} />
+                {!s.llm.model && <Tag tone="amber">Required</Tag>}
               </Row>
               {s.llm.provider === 'openai_compatible' && (
                 <Row title="Base URL">
-                  <input className="field mono" style={{ width: 280 }} placeholder="https://llm.internal/v1" aria-label="Base URL" defaultValue={s.llm.baseUrl ?? ''} onBlur={(e) => set({ llm: { ...s.llm, baseUrl: e.target.value.trim() || undefined } })} />
+                  <input className="field mono" style={{ width: 280 }} placeholder="https://llm.internal/v1" aria-label="Base URL" required type="url" defaultValue={s.llm.baseUrl ?? ''} onBlur={(e) => set({ llm: { ...s.llm, baseUrl: e.target.value.trim() || undefined } })} />
+                  {!s.llm.baseUrl && <Tag tone="amber">Required</Tag>}
                 </Row>
               )}
               <Row title="API key" hint="Stored in the macOS Keychain. It can be replaced, never read back.">

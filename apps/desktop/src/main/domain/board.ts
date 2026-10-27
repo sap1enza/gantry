@@ -135,11 +135,17 @@ export class Board implements IngestSink {
 
   resolveTarget(target: string) {
     return parseRow(
-      this.db
-        .prepare('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?')
-        .get(target, target.toUpperCase(), dedupeKey('api', target)) ??
-        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target),
+      this.db.prepare('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?').get(target, target.toUpperCase(), dedupeKey('api', target)) ??
+        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target) ??
+        this.byBareExternalId(target),
     )
+  }
+
+  private byBareExternalId(externalId: string) {
+    const rows = this.db
+      .prepare("SELECT data FROM actionables WHERE dedupe_key LIKE 'api:%' AND substr(dedupe_key, -?) = ? LIMIT 2")
+      .all(externalId.length + 1, `:${externalId}`)
+    return rows.length === 1 ? rows[0] : undefined
   }
 
   private byKey(kind: SourceKind, externalKey: string) {
@@ -329,12 +335,21 @@ export class Board implements IngestSink {
     )
   }
 
-  applyPatch(target: string, patch: ActionablePatch) {
+  private apiTarget(target: string, action: string) {
     const card = this.resolveTarget(target)
-    if (!card) {
-      this.log({ type: 'received', outcome: 'ignored:filtered', title: `Update for unknown actionable ${target}`, source: 'API', actor: { kind: 'source', name: 'API' } })
-      return
-    }
+    if (card?.source.kind === 'api') return card
+    this.log({
+      type: 'received',
+      outcome: 'ignored:filtered',
+      title: `${action} for ${card ? 'non-API' : 'unknown'} actionable ${target}`,
+      source: 'API',
+      actor: { kind: 'source', name: 'API' },
+    })
+  }
+
+  applyPatch(target: string, patch: ActionablePatch) {
+    const card = this.apiTarget(target, 'Update')
+    if (!card) return
     this.update(
       card.id,
       (a) => {
@@ -348,7 +363,7 @@ export class Board implements IngestSink {
   }
 
   dismiss(target: string) {
-    const card = this.resolveTarget(target)
+    const card = this.apiTarget(target, 'Dismiss')
     if (card) void this.dismissCard(card.id, { kind: 'source', name: card.source.name }).catch((err) => console.error('dismiss failed', err))
   }
 
@@ -404,10 +419,14 @@ export class Board implements IngestSink {
     )
   }
 
+  assertMove(a: Actionable, column: ColumnId) {
+    if (!this.columns().some((c) => c.id === column) || !canMove(a, column)) throw new Error(`${a.displayId} cannot move to ${column}`)
+  }
+
   move(id: string, column: ColumnId, position: number) {
     const a = this.must(id)
+    this.assertMove(a, column)
     const columns = this.columns()
-    if (!columns.some((c) => c.id === column) || !canMove(a, column)) throw new Error(`${a.displayId} cannot move to ${column}`)
     const from = a.column
     if (column === 'done' && from !== 'done') this.markDoneFields(a)
     if (from === 'done' && column !== 'done') this.reopenFields(a)
@@ -425,7 +444,7 @@ export class Board implements IngestSink {
         c.position = i
         if (c !== a) this.write(c)
       })
-      this.save(a, from === column ? undefined : { type: 'moved', detail: `${name(from)} → ${name(column)}`, actor: USER })
+      this.save(a, from === column ? undefined : { type: from === 'done' ? 'reopened' : 'moved', detail: `${name(from)} → ${name(column)}`, actor: USER })
       this.db.exec('COMMIT')
     } catch (err) {
       this.db.exec('ROLLBACK')

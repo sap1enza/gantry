@@ -114,7 +114,7 @@ export function TriageView() {
 }
 
 function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardFieldVisibility }) {
-  const { sort, selectedId, act, open, select, run } = useApp()
+  const { sort, selectedId, act, move, open, select, run } = useApp()
   const [drag, setDrag] = useState<Drag>()
   const [dropAt, setDropAt] = useState<DropAt>()
   const byColumn = useMemo(() => new Map(s.columns.map((c) => [c.id, columnCards(s, c.id, sort)])), [s, sort])
@@ -138,13 +138,14 @@ function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardF
       if (!canDropOn(d.card, column)) return
       const list = columnCards(s, column, 'manual').filter((c) => c.id !== d.card.id)
       const index = beforeId ? list.findIndex((c) => c.id === beforeId) : -1
-      await run(api.board.move(d.card.id, column, index < 0 ? list.length : index))
+      await move(d.card, column, index < 0 ? list.length : index)
     },
-    [run, endDrag],
+    [run, move, endDrag],
   )
   const cardHandlers = useMemo<CardHandlers>(
     () => ({
       act,
+      move,
       open,
       select,
       run,
@@ -159,7 +160,7 @@ function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardF
       },
       drop: (e, card) => drop(e, card.column, card.id),
     }),
-    [act, open, select, run, endDrag, drop],
+    [act, move, open, select, run, endDrag, drop],
   )
 
   return (
@@ -352,6 +353,7 @@ function statusTags(card: Actionable, now: number): string[] {
 
 interface CardHandlers {
   act: AppState['act']
+  move: AppState['move']
   open: AppState['open']
   select: AppState['select']
   run: AppState['run']
@@ -443,7 +445,7 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
             })}
           {moveTargets.length > 0 && <div className="menu-label">Move to</div>}
           {moveTargets.map((c) => (
-            <button key={c.id} className="menu-item" onClick={() => (menu.close(), void on.run(api.board.move(card.id, c.id, 0)))}>
+            <button key={c.id} className="menu-item" onClick={() => (menu.close(), void on.move(card, c.id, 0))}>
               {c.name}
             </button>
           ))}

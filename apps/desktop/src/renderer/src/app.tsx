@@ -6,6 +6,7 @@ import {
   type BoardFilter,
   type BoardSnapshot,
   type CardAction,
+  type ColumnId,
   type ConnectionInfo,
   type DispatchPreview,
   type Settings,
@@ -54,6 +55,7 @@ export interface AppState {
   select(id?: string): void
   closePanel(): void
   act(action: CardAction, a: Actionable, anchor?: HTMLElement): Promise<void>
+  move(a: Actionable, column: ColumnId, position: number): Promise<void>
   reopenFor?: string
   setReopenFor(id?: string): void
   dispatchFor?: { card: Actionable; preview: DispatchPreview }
@@ -72,6 +74,8 @@ export interface AppState {
   toast(message: string): void
   run<T>(p: Promise<T>): Promise<T | undefined>
 }
+
+const hasProviderRun = (a: Actionable) => a.column === 'in_progress' && !!a.dispatch && a.agentState !== 'stopped'
 
 const Ctx = createContext<AppState | null>(null)
 export const useApp = () => useContext(Ctx)!
@@ -204,6 +208,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [ask],
   )
 
+  const chooseCleanup = useCallback(
+    async (a: Actionable): Promise<'delete' | 'keep' | undefined | null> => {
+      if (actState.current.settings?.workspaceCleanup !== 'ask' || !a.dispatch) return undefined
+      const choice = await ask({
+        title: `Mark ${a.displayId} done`,
+        body: (
+          <>
+            Delete the agent workspace at <code>{a.dispatch.worktreePath}</code>? Remote branches and pull requests are kept.
+          </>
+        ),
+        actions: [
+          { label: 'Cancel', value: '' },
+          { label: 'Keep workspace', value: 'keep' },
+          { label: 'Delete workspace', value: 'delete', tone: 'primary' },
+        ],
+      })
+      return choice ? (choice as 'delete' | 'keep') : null
+    },
+    [ask],
+  )
+  const move = useCallback(
+    async (a: Actionable, column: ColumnId, position: number) => {
+      if (column !== 'done' || a.column === 'done') return void (await run(api.board.move(a.id, column, position)))
+      const cleanup = await chooseCleanup(a)
+      if (cleanup === null) return
+      await run(api.board.done(a.id, cleanup).then(() => api.board.move(a.id, column, position)))
+    },
+    [run, chooseCleanup],
+  )
+
   const actState = useRef({ settings, selectedId })
   actState.current = { settings, selectedId }
   const act = useCallback(
@@ -227,7 +261,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (confirmStop && !(await confirm(`Stop ${a.displayId}?`, 'Stopping ends execution and returns the card to To-do. The workspace is kept; pausing preserves the session instead.', 'Stop agent'))) return
           return void (await run(api.board.stop(id)))
         case 'dismiss':
-          if (isAgentActive(a) && confirmStop && !(await confirm(`Dismiss ${a.displayId}?`, 'The running agent will be stopped and the card archived.', 'Stop and dismiss'))) return
+          if (hasProviderRun(a) && confirmStop && !(await confirm(`Dismiss ${a.displayId}?`, 'The agent will be stopped and the card archived.', 'Stop and dismiss'))) return
           await run(api.board.dismiss(id))
           if (selectedId === id) setPanelOpen(false)
           return
@@ -235,24 +269,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isAgentActive(a)) return toast('Pause or stop the agent before snoozing.')
           return setSnoozeFor({ card: a, anchor: anchor?.getBoundingClientRect() })
         case 'done': {
-          let cleanup: 'delete' | 'keep' | undefined
-          if (settings?.workspaceCleanup === 'ask' && a.dispatch) {
-            const choice = await ask({
-              title: `Mark ${a.displayId} done`,
-              body: (
-                <>
-                  Delete the agent workspace at <code>{a.dispatch.worktreePath}</code>? Remote branches and pull requests are kept.
-                </>
-              ),
-              actions: [
-                { label: 'Cancel', value: '' },
-                { label: 'Keep workspace', value: 'keep' },
-                { label: 'Delete workspace', value: 'delete', tone: 'primary' },
-              ],
-            })
-            if (!choice) return
-            cleanup = choice as 'delete' | 'keep'
-          }
+          const cleanup = await chooseCleanup(a)
+          if (cleanup === null) return
           return void (await run(api.board.done(id, cleanup)))
         }
         case 'reopen':
@@ -264,7 +282,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return void (await run(api.board.move(id, 'todo', 0)))
       }
     },
-    [run, confirm, ask, toast, open],
+    [run, confirm, chooseCleanup, toast, open],
   )
 
   const overlayOpen = !!(dialog || dispatchFor || snoozeFor || newOpen || searchOpen)
@@ -347,6 +365,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       select: setSelectedId,
       closePanel: () => setPanelOpen(false),
       act,
+      move,
       reopenFor,
       setReopenFor,
       dispatchFor,
@@ -365,7 +384,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       run,
     }),
-    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, checks, reloadChecks, selectedId, panelOpen, open, act, reopenFor, dispatchFor, snoozeFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
+    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, checks, reloadChecks, selectedId, panelOpen, open, act, move, reopenFor, dispatchFor, snoozeFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
   )
 
   return (
