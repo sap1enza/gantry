@@ -29,7 +29,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`, see `.dev.vars.ex
 ## Provider setup
 
 - GitHub App: callback URLs `<PUBLIC_URL>/oauth/github/callback` and `<PUBLIC_URL>/oauth/github_signin/callback`, "Expire user authorization tokens" on, webhook URL `<PUBLIC_URL>/webhooks/github`.
-- Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history groups:history im:history mpim:history users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
+- Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history groups:history im:history mpim:history search:read users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
 - Google: OAuth client (web) with redirect `<PUBLIC_URL>/oauth/google/callback`, Gmail API enabled, scope `gmail.readonly`.
 
 ## Run locally
@@ -52,4 +52,8 @@ pnpm wrangler d1 migrations apply gantry --remote
 pnpm deploy
 ```
 
-A cron (`17 * * * *`) deletes expired inbox items, OAuth states, email links and rate-limit windows.
+A cron (`17 * * * *`) deletes expired inbox items, OAuth states, email links, completion codes and rate-limit windows.
+
+## Auth completion
+
+OAuth callbacks and magic links never finalize in the browser. They create a single-use completion code (10 minutes, bound to the device that started the flow) and redirect to `gantry://auth/complete?code=…`, also showing the code to paste. The app redeems it with `POST /auth/complete`; any other device, an expired code or a reused code gets `400 invalid_code`.

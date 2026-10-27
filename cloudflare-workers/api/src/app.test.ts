@@ -1,7 +1,8 @@
 import type { DeviceRegistration, InboxResponse, MeResponse } from '@gantry/shared'
 import { convertV4MiniflareOptions, Miniflare } from 'miniflare'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import migration from '../migrations/0001_init.sql?raw'
+import init from '../migrations/0001_init.sql?raw'
+import completionCodes from '../migrations/0002_completion_codes.sql?raw'
 import { createApp } from './app'
 import { hmacSha256Hex } from './crypto'
 import type { Env } from './env'
@@ -41,17 +42,31 @@ function mockGithubOAuth(account = { id: 7, login: 'ada' }, tokenOverrides: Reco
   })
 }
 
-async function connect(auth: string, provider: string) {
+async function authorize(auth: string, provider: string) {
   const { url } = (await (await call(`/oauth/${provider}/start`, { method: 'POST', auth })).json()) as { url: string }
   const state = new URL(url).searchParams.get('state')
   return call(`/oauth/${provider}/callback?code=abc&state=${state}`)
 }
 
+const completionCode = async (page: Response) => /<code id="code">([^<]+)</.exec(await page.text())![1]!
+const complete = (auth: string, code: string) => call('/auth/complete', { method: 'POST', auth, body: JSON.stringify({ code }) })
+
+async function magicLink(auth: string) {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  await call('/auth/email', { method: 'POST', auth, body: JSON.stringify({ email: 'Ada@Example.com' }) })
+  const link = /(https:\S+)/.exec(String(log.mock.lastCall![0]))![1]!
+  log.mockRestore()
+  return link.replace('https://api.test', '')
+}
+
+const connect = async (auth: string, provider: string) => complete(auth, await completionCode(await authorize(auth, provider)))
+
 beforeAll(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {}', d1Databases: ['DB'] }))
   const DB = await mf.getD1Database('DB')
   await DB.batch(
-    migration
+    [init, completionCodes]
+      .join(';')
       .split(';')
       .map((s) => s.trim())
       .filter(Boolean)
@@ -78,7 +93,7 @@ afterAll(() => mf.dispose())
 beforeEach(async () => {
   fetchMock.mockReset()
   await env.DB.batch(
-    ['inbox', 'grants', 'api_tokens', 'devices', 'oauth_states', 'email_links', 'rate_limits', 'users'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
+    ['inbox', 'grants', 'api_tokens', 'completion_codes', 'devices', 'oauth_states', 'email_links', 'rate_limits', 'users'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   )
 })
 
@@ -166,11 +181,13 @@ describe('hardening', () => {
     expect(res.status).toBe(200)
   })
 
-  it('scheduled cleanup deletes expired inbox items', async () => {
-    const { auth, userId } = await registerDevice()
+  it('scheduled cleanup deletes expired inbox items and completion codes', async () => {
+    const { auth, userId, deviceId } = await registerDevice()
     await env.DB.prepare("INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES ('old', ?, '{}', '2000-01-01', '2000-01-31')").bind(userId).run()
+    await env.DB.prepare("INSERT INTO completion_codes (code_hash, device_id, payload, expires_at) VALUES ('old', ?, '', '2000-01-01')").bind(deviceId).run()
     await deleteExpired(env.DB)
     expect(await env.DB.prepare("SELECT id FROM inbox WHERE id = 'old'").first()).toBeNull()
+    expect(await env.DB.prepare('SELECT 1 FROM completion_codes').first()).toBeNull()
     expect(await inbox(auth)).toEqual([])
   })
 })
@@ -180,8 +197,7 @@ describe('oauth', () => {
     const { auth } = await registerDevice()
     mockGithubOAuth()
     const res = await connect(auth, 'github')
-    expect(res.status).toBe(200)
-    expect(await res.text()).toContain('Connected')
+    expect(await res.json()).toEqual({ kind: 'grant', provider: 'github' })
     const stored = await env.DB.prepare('SELECT access_token FROM grants').first<{ access_token: string }>()
     expect(stored!.access_token).not.toContain('gho_access')
     expect((await inbox(auth))[0]!.payload).toMatchObject({ kind: 'connection', provider: 'github', status: 'connected', account: { login: 'ada' } })
@@ -224,6 +240,29 @@ describe('oauth', () => {
     await connect(auth, 'github')
     const res = await call('/v1/grants/github/refresh', { method: 'POST', auth })
     expect(await res.json()).toMatchObject({ provider: 'github', accessToken: 'gho_access' })
+  })
+
+  it('force refreshes a fresh token', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth()
+    await connect(auth, 'github')
+    fetchMock.mockResolvedValueOnce(json({ access_token: 'gho_forced', refresh_token: 'ghr_new', expires_in: 28800 }))
+    const res = await call('/v1/grants/github/refresh?force=1', { method: 'POST', auth })
+    expect(await res.json()).toMatchObject({ accessToken: 'gho_forced' })
+  })
+
+  it('marks the grant reconnect_required when a forced refresh has no refresh token', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth(undefined, { refresh_token: undefined, expires_in: undefined })
+    await connect(auth, 'github')
+    expect((await call('/v1/grants/github/refresh?force=1', { method: 'POST', auth })).status).toBe(409)
+    expect((await me(auth)).grants[0]!.status).toBe('reconnect_required')
+  })
+
+  it('requests search:read in the Slack user scopes', async () => {
+    const { auth } = await registerDevice()
+    const { url } = (await (await call('/oauth/slack/start', { method: 'POST', auth })).json()) as { url: string }
+    expect(new URL(url).searchParams.get('user_scope')!.split(',')).toContain('search:read')
   })
 
   it('refreshes a token that is near expiry without exposing the refresh token', async () => {
@@ -284,17 +323,60 @@ describe('oauth', () => {
   })
 })
 
-describe('email sign-in', () => {
-  it('logs the magic link without Resend and verifies it once', async () => {
+describe('auth completion', () => {
+  it('defers the grant until the initiating device redeems the code once', async () => {
     const { auth } = await registerDevice()
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    expect((await call('/auth/email', { method: 'POST', auth, body: JSON.stringify({ email: 'Ada@Example.com' }) })).status).toBe(204)
-    const link = /(https:\S+)/.exec(String(log.mock.lastCall![0]))![1]!
-    log.mockRestore()
-    const path = link.replace('https://api.test', '')
-    expect((await call(path)).status).toBe(200)
+    mockGithubOAuth()
+    const page = await authorize(auth, 'github')
+    const html = await page.clone().text()
+    const code = await completionCode(page)
+    expect(html).toContain(`url=gantry://auth/complete?code=${code}`)
+    expect(await env.DB.prepare('SELECT 1 FROM grants').first()).toBeNull()
+    expect(await env.DB.prepare('SELECT code_hash FROM completion_codes').first('code_hash')).not.toBe(code)
+    expect(await inbox(auth)).toEqual([])
+
+    expect(await (await complete(auth, code)).json()).toEqual({ kind: 'grant', provider: 'github' })
+    expect((await inbox(auth))[0]!.payload).toMatchObject({ kind: 'connection', provider: 'github', status: 'connected' })
+    expect((await complete(auth, code)).status).toBe(400)
+  })
+
+  it('rejects a code redeemed by another device without granting either', async () => {
+    const initiator = await registerDevice()
+    const victim = await registerDevice()
+    mockGithubOAuth()
+    const code = await completionCode(await authorize(initiator.auth, 'github'))
+    const res = await complete(victim.auth, code)
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid_code' })
+    expect((await me(victim.auth)).grants).toEqual([])
+    expect((await complete(initiator.auth, code)).status).toBe(400)
+  })
+
+  it('rejects an expired code', async () => {
+    const { auth } = await registerDevice()
+    mockGithubOAuth()
+    const code = await completionCode(await authorize(auth, 'github'))
+    await env.DB.prepare("UPDATE completion_codes SET expires_at = '2000-01-01'").run()
+    expect(await (await complete(auth, code)).json()).toEqual({ error: 'invalid_code' })
+  })
+
+  it('rejects a magic link code redeemed by another device', async () => {
+    const { auth } = await registerDevice()
+    const other = await registerDevice()
+    const path = await magicLink(auth)
+    const code = await completionCode(await call(path))
     expect((await call(path)).status).toBe(400)
+    expect(await me(auth)).toMatchObject({ signedIn: false })
+    expect((await complete(other.auth, code)).status).toBe(400)
+    expect(await me(other.auth)).toMatchObject({ signedIn: false })
+  })
+
+  it('signs in the initiating device with a magic link code once', async () => {
+    const { auth } = await registerDevice()
+    const code = await completionCode(await call(await magicLink(auth)))
+    expect(await (await complete(auth, code)).json()).toEqual({ kind: 'signin' })
     expect(await me(auth)).toMatchObject({ email: 'ada@example.com', signedIn: true })
+    expect((await complete(auth, code)).status).toBe(400)
   })
 })
 

@@ -33,7 +33,7 @@ const providerConfig = (env: Env, provider: OAuthProvider) =>
       tokenUrl: 'https://slack.com/api/oauth.v2.access',
       clientId: env.SLACK_CLIENT_ID,
       clientSecret: env.SLACK_CLIENT_SECRET,
-      authorizeParams: { user_scope: 'channels:history,groups:history,im:history,mpim:history,users:read' },
+      authorizeParams: { user_scope: 'channels:history,groups:history,im:history,mpim:history,search:read,users:read' },
     },
     google: {
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
