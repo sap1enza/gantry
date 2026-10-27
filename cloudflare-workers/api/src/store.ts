@@ -136,6 +136,7 @@ export async function deleteExpired(db: D1Database) {
     db.prepare('DELETE FROM inbox WHERE expires_at < ?').bind(ts),
     db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').bind(ts),
     db.prepare('DELETE FROM email_links WHERE expires_at < ?').bind(ts),
+    db.prepare('DELETE FROM completion_codes WHERE expires_at < ?').bind(ts),
     db.prepare('DELETE FROM rate_limits WHERE window < ?').bind(Math.floor(Date.now() / 60_000) - 1),
   ])
 }

@@ -20,7 +20,7 @@ import { Board } from './domain/board'
 import { createIngestion } from './ingestion'
 import { createClaudeProvider } from './providers/claude'
 import { AccountService } from './system/account'
-import { parseDeepLink, PROTOCOL } from './system/deeplink'
+import { parseDeepLink, PROTOCOL, type DeepLink } from './system/deeplink'
 import { exec, shellCommand } from './system/exec'
 import { loginItemSync } from './system/login-item'
 import { notificationFor } from './system/notifications'
@@ -31,8 +31,16 @@ app.setPath('userData', process.env.GANTRY_USER_DATA ?? join(app.getPath('appDat
 
 let window: BrowserWindow | undefined
 const linkFromArgv = (argv: string[]) => parseDeepLink(argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? '')
-let pendingCard = linkFromArgv(process.argv)
+let pendingCard: string | undefined
 let resolveCard = (target: string) => target
+let readyForAuth = (_complete: (code: string) => void) => {}
+const authReady = new Promise<(code: string) => void>((resolve) => (readyForAuth = resolve))
+
+function openLink(link: DeepLink | undefined) {
+  if (link?.kind === 'actionable') navigateTo(link.id)
+  else if (link?.kind === 'authComplete') void authReady.then((complete) => complete(link.code))
+}
+openLink(linkFromArgv(process.argv))
 
 function navigateTo(target: string | undefined) {
   if (!target) return
@@ -196,6 +204,15 @@ function main() {
     return method(...(Array.isArray(args) ? args : []))
   })
 
+  readyForAuth((code) => {
+    if (window) window.show()
+    else createWindow()
+    api.account
+      .completeAuth(code)
+      .then(() => ingestion?.syncNow())
+      .catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
+  })
+
   const syncAccount = () => void account.ensureDevice().then((ok) => (ok ? account.refresh() : undefined))
   syncAccount()
   setInterval(syncAccount, MINUTE_MS)
@@ -218,11 +235,11 @@ else {
   app.setAsDefaultProtocolClient(PROTOCOL)
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    navigateTo(parseDeepLink(url))
+    openLink(parseDeepLink(url))
   })
   app.on('second-instance', (_, argv) => {
-    const card = linkFromArgv(argv)
-    if (card) navigateTo(card)
+    const link = linkFromArgv(argv)
+    if (link) openLink(link)
     else window?.show()
   })
   app.on('activate', () => {

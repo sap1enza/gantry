@@ -164,7 +164,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () =>
       bridge.onPush((p) => {
         if (p.type === 'board.changed') void reloadSnapshot()
-        else if (p.type === 'connections.changed') void Promise.all([reloadConnections(), reloadChecks()])
+        else if (p.type === 'connections.changed') void Promise.all([reloadConnections(), reloadAccount(), reloadChecks()])
         else if (p.type === 'settings.changed') void Promise.all([reloadSettings(), reloadAccount(), reloadChecks()])
         else if (p.type === 'navigate') {
           if (p.actionableId) open(p.actionableId)

@@ -1,7 +1,9 @@
 import {
   createActionableSchema,
+  DEEP_LINKS,
   patchActionableSchema,
   type ApiTokenInfo,
+  type AuthCompletion,
   type CreateActionableRequest,
   type CreatedApiToken,
   type DeviceRegistration,
@@ -16,9 +18,19 @@ import { bodyLimit } from 'hono/body-limit'
 import { createMiddleware } from 'hono/factory'
 import { validator } from 'hono/validator'
 import { z } from 'zod'
-import { hmacSha256Hex, randomToken, sha256, timingSafeEqual } from './crypto'
+import { decrypt, encrypt, hmacSha256Hex, randomToken, sha256, timingSafeEqual } from './crypto'
 import type { AppEnv } from './env'
-import { authorizeUrl, exchangeCode, GRANT_PROVIDERS, OAuthRejected, OAUTH_PROVIDERS, refreshTokens, revokeGrant, type OAuthStartProvider } from './oauth'
+import {
+  authorizeUrl,
+  exchangeCode,
+  GRANT_PROVIDERS,
+  OAuthRejected,
+  OAUTH_PROVIDERS,
+  refreshTokens,
+  revokeGrant,
+  type ExchangeResult,
+  type OAuthStartProvider,
+} from './oauth'
 import {
   addRoutingKey,
   decryptGrant,
@@ -36,6 +48,7 @@ import {
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const EMAIL_LINK_TTL_MS = 15 * 60 * 1000
+const COMPLETION_CODE_TTL_MS = 10 * 60 * 1000
 const REFRESH_SKEW_MS = 5 * 60 * 1000
 const SLACK_REPLAY_WINDOW_S = 5 * 60
 const EMAIL_SENDS_PER_MINUTE = 5
@@ -45,6 +58,12 @@ const WEBHOOK_BODY_LIMIT = 1024 * 1024
 const nameSchema = z.object({ name: z.string().trim().min(1).max(100) })
 const ackSchema = z.object({ ids: z.array(z.string()).max(1000) })
 const emailSchema = z.object({ email: z.email().max(254) })
+const completeSchema = z.object({ code: z.string().trim().min(1).max(128) })
+
+type PendingAuth =
+  | { kind: 'grant'; provider: OAuthProvider; result: ExchangeResult }
+  | { kind: 'github_signin'; account: GrantAccount }
+  | { kind: 'email'; email: string }
 
 const SAMPLE_ACTIONABLE: CreateActionableRequest = {
   title: 'Test actionable from Gantry',
@@ -67,11 +86,20 @@ const parseJsonOrNull = (raw: string): unknown => {
 
 const tooMany = (c: Ctx, retryAfter: number) => c.json({ error: 'rate_limited' }, 429, { 'retry-after': String(retryAfter) })
 
-const page = (c: Ctx, message: string, status: 200 | 400 | 502 = 200) =>
-  c.html(
-    `<!doctype html><meta charset="utf-8"><title>Gantry</title><body style="font-family:system-ui;text-align:center;padding:4rem"><p>${message}</p></body>`,
-    status,
+const html = (c: Ctx, body: string, status: 200 | 400 | 502 = 200, head = '') =>
+  c.html(`<!doctype html><meta charset="utf-8">${head}<title>Gantry</title><body style="font-family:system-ui;text-align:center;padding:4rem">${body}</body>`, status)
+
+const page = (c: Ctx, message: string, status: 200 | 400 | 502 = 200) => html(c, `<p>${message}</p>`, status)
+
+const completionPage = (c: Ctx, code: string) => {
+  const link = DEEP_LINKS.authComplete(code)
+  return html(
+    c,
+    `<p>Almost done. Finish in Gantry.</p><p><a href="${link}">Open Gantry</a></p><p>Or paste this code in Gantry:</p><p><code id="code">${code}</code> <button onclick="navigator.clipboard.writeText('${code}')">Copy</button></p>`,
+    200,
+    `<meta http-equiv="refresh" content="0;url=${link}">`,
   )
+}
 
 const json = <T extends z.ZodType>(schema: T) =>
   validator('json', (value, c) => {
@@ -258,21 +286,28 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const provider = c.req.param('provider') as OAuthStartProvider
     if (!OAUTH_PROVIDERS.includes(provider)) return c.json({ error: 'unknown_provider' }, 404)
     const state = randomToken()
-    await c.env.DB.prepare('INSERT INTO oauth_states (state, user_id, provider, expires_at) VALUES (?, ?, ?, ?)')
-      .bind(state, c.get('userId'), provider, new Date(Date.now() + OAUTH_STATE_TTL_MS).toISOString())
+    await c.env.DB.prepare('INSERT INTO oauth_states (state, user_id, device_id, provider, expires_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(state, c.get('userId'), c.get('deviceId'), provider, new Date(Date.now() + OAUTH_STATE_TTL_MS).toISOString())
       .run()
     return c.json({ url: authorizeUrl(c.env, provider, state) })
   })
 
+  async function issueCompletionCode(c: Ctx, deviceId: string, pending: PendingAuth) {
+    const code = randomToken()
+    await c.env.DB.prepare('INSERT INTO completion_codes (code_hash, device_id, payload, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(await sha256(code), deviceId, await encrypt(c.env.TOKEN_ENCRYPTION_KEY, JSON.stringify(pending)), new Date(Date.now() + COMPLETION_CODE_TTL_MS).toISOString())
+      .run()
+    return completionPage(c, code)
+  }
+
   app.get('/oauth/:provider/callback', async (c) => {
     const provider = c.req.param('provider') as OAuthStartProvider
     const code = c.req.query('code')
-    const stored = await c.env.DB.prepare('DELETE FROM oauth_states WHERE state = ? RETURNING user_id, provider, expires_at')
+    const stored = await c.env.DB.prepare('DELETE FROM oauth_states WHERE state = ? RETURNING device_id, provider, expires_at')
       .bind(c.req.query('state') ?? '')
       .first<Record<string, string>>()
-    if (!stored || stored.provider !== provider || stored.expires_at! < now()) return page(c, 'This link has expired. Try connecting again from Gantry.', 400)
+    if (!stored?.device_id || stored.provider !== provider || stored.expires_at! < now()) return page(c, 'This link has expired. Try connecting again from Gantry.', 400)
     if (!code) return page(c, 'Connection cancelled. You can close this tab.', 400)
-    const userId = stored.user_id!
     let result
     try {
       result = await exchangeCode(fetchImpl, c.env, provider, code)
@@ -280,15 +315,31 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
       console.error(err)
       return page(c, 'Connection failed. Try again from Gantry.', 502)
     }
-    if (provider === 'github_signin') {
-      const existing = await c.env.DB.prepare('SELECT id FROM users WHERE github_id = ?').bind(result.account.id).first<{ id: string }>()
-      if (existing) await mergeUsers(c.env.DB, userId, existing.id)
-      await c.env.DB.prepare('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?').bind(result.account.id, result.account.login, existing?.id ?? userId).run()
-      return page(c, 'Signed in, you can close this tab.')
+    return issueCompletionCode(c, stored.device_id, provider === 'github_signin' ? { kind: 'github_signin', account: result.account } : { kind: 'grant', provider, result })
+  })
+
+  app.post('/auth/complete', deviceAuth, json(completeSchema), async (c) => {
+    const row = await c.env.DB.prepare('DELETE FROM completion_codes WHERE code_hash = ? RETURNING device_id, payload, expires_at')
+      .bind(await sha256(c.req.valid('json').code))
+      .first<Record<string, string>>()
+    if (!row || row.device_id !== c.get('deviceId') || row.expires_at! < now()) return c.json({ error: 'invalid_code' }, 400)
+    const pending = JSON.parse(await decrypt(c.env.TOKEN_ENCRYPTION_KEY, row.payload!)) as PendingAuth
+    const userId = c.get('userId')
+    if (pending.kind === 'grant') {
+      await saveGrant(c.env, userId, pending.provider, pending.result)
+      await enqueue(c.env.DB, [userId], { kind: 'connection', provider: pending.provider, status: 'connected', account: pending.result.account })
+      return c.json({ kind: 'grant', provider: pending.provider } satisfies AuthCompletion)
     }
-    await saveGrant(c.env, userId, provider, result)
-    await enqueue(c.env.DB, [userId], { kind: 'connection', provider, status: 'connected', account: result.account })
-    return page(c, 'Connected, you can close this tab.')
+    if (pending.kind === 'github_signin') {
+      const existing = await c.env.DB.prepare('SELECT id FROM users WHERE github_id = ?').bind(pending.account.id).first<{ id: string }>()
+      if (existing) await mergeUsers(c.env.DB, userId, existing.id)
+      await c.env.DB.prepare('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?').bind(pending.account.id, pending.account.login, existing?.id ?? userId).run()
+    } else {
+      const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(pending.email).first<{ id: string }>()
+      if (existing) await mergeUsers(c.env.DB, userId, existing.id)
+      else await c.env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(pending.email, userId).run()
+    }
+    return c.json({ kind: 'signin' } satisfies AuthCompletion)
   })
 
   app.post('/v1/grants/:provider/refresh', deviceAuth, async (c) => {
@@ -299,7 +350,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const grant = await decryptGrant(c.env, row)
     let accessToken = grant.accessToken
     let expiresAt = row.expires_at ?? undefined
-    if (row.expires_at && Date.parse(row.expires_at) - Date.now() < REFRESH_SKEW_MS) {
+    if (c.req.query('force') === '1' || (row.expires_at && Date.parse(row.expires_at) - Date.now() < REFRESH_SKEW_MS)) {
       try {
         if (!grant.refreshToken) throw new OAuthRejected('no refresh token')
         const refreshed = await refreshTokens(fetchImpl, c.env, provider, grant.refreshToken)
@@ -336,8 +387,8 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     if (retryAfter) return tooMany(c, retryAfter)
     const body = c.req.valid('json')
     const token = randomToken()
-    await c.env.DB.prepare('INSERT INTO email_links (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)')
-      .bind(await sha256(token), c.get('userId'), body.email.toLowerCase(), new Date(Date.now() + EMAIL_LINK_TTL_MS).toISOString())
+    await c.env.DB.prepare('INSERT INTO email_links (token_hash, user_id, device_id, email, expires_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(await sha256(token), c.get('userId'), c.get('deviceId'), body.email.toLowerCase(), new Date(Date.now() + EMAIL_LINK_TTL_MS).toISOString())
       .run()
     const link = `${c.env.PUBLIC_URL}/auth/email/verify?token=${token}`
     if (!c.env.RESEND_API_KEY) {
@@ -359,14 +410,11 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   })
 
   app.get('/auth/email/verify', async (c) => {
-    const link = await c.env.DB.prepare('DELETE FROM email_links WHERE token_hash = ? RETURNING user_id, email, expires_at')
+    const link = await c.env.DB.prepare('DELETE FROM email_links WHERE token_hash = ? RETURNING device_id, email, expires_at')
       .bind(await sha256(c.req.query('token') ?? ''))
       .first<Record<string, string>>()
-    if (!link || link.expires_at! < now()) return page(c, 'This link has expired. Request a new one from Gantry.', 400)
-    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(link.email).first<{ id: string }>()
-    if (existing) await mergeUsers(c.env.DB, link.user_id!, existing.id)
-    else await c.env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(link.email, link.user_id).run()
-    return page(c, 'Signed in, you can close this tab.')
+    if (!link?.device_id || link.expires_at! < now()) return page(c, 'This link has expired. Request a new one from Gantry.', 400)
+    return issueCompletionCode(c, link.device_id, { kind: 'email', email: link.email! })
   })
 
   app.post('/webhooks/github', async (c) => {
