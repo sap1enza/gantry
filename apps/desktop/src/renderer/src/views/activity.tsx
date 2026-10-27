@@ -44,7 +44,6 @@ const CHIPS: { label: string; types?: EventType[] }[] = [
   { label: 'Completed', types: ['completed'] },
   { label: 'Dismissed', types: ['dismissed'] },
 ]
-const SOURCES = ['GitHub', 'Slack', 'Email', 'API', 'Claude Code', 'Manual', 'Gantry']
 const RANGES = [
   { id: 'today', label: 'Today', days: 0 },
   { id: '7d', label: 'Last 7 days', days: 7 },
@@ -115,6 +114,7 @@ export function ActivityView() {
     if (path) app.toast(`Exported to ${path}`)
   }
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+  const sourceOptions = [...new Set([...sources, ...events.map((e) => e.source)])].sort()
   const chip = CHIPS.find((c) => (c.types ?? []).join() === types.join())
 
   return (
@@ -167,7 +167,7 @@ export function ActivityView() {
               <button className="menu-item" onClick={() => setSources([])}>
                 All sources
               </button>
-              {SOURCES.map((s) => (
+              {sourceOptions.map((s) => (
                 <label key={s} className="menu-item check">
                   <input type="checkbox" checked={sources.includes(s)} onChange={() => setSources(toggle(sources, s))} />
                   <SourceIcon name={s} /> {s}
