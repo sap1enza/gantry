@@ -22,6 +22,7 @@ import { createClaudeProvider } from './providers/claude'
 import { AccountService } from './system/account'
 import { parseDeepLink, PROTOCOL } from './system/deeplink'
 import { exec, shellCommand } from './system/exec'
+import { loginItemSync } from './system/login-item'
 import { notificationFor } from './system/notifications'
 
 const MINUTE_MS = 60_000
@@ -108,8 +109,9 @@ function main() {
     if (p.type === 'board.changed') updateBadge()
     if (p.type === 'activity.appended') notify(p.event)
   }
+  const syncLoginItem = loginItemSync((openAtLogin) => app.setLoginItemSettings({ openAtLogin }))
   const applySettings = (s: Settings) => {
-    app.setLoginItemSettings({ openAtLogin: s.launchAtLogin })
+    syncLoginItem(s.launchAtLogin)
     nativeTheme.themeSource = s.appearance
     updateBadge()
   }

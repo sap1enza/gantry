@@ -3,7 +3,6 @@ import {
   SECRET_KEYS,
   type ActivityEvent,
   type AgentProvider,
-  type CreateActionableRequest,
   type GantryApi,
   type GantryPush,
   type Settings,
@@ -114,7 +113,10 @@ export function createApi(deps: ApiDeps): GantryApi {
     connections: {
       list: async () => deps.ingestion?.connections() ?? [],
       connect: (provider) => ingestion().connect(provider),
-      disconnect: (provider) => ingestion().disconnect(provider),
+      async disconnect(provider) {
+        await ingestion().disconnect(provider)
+        board.markSourceDisconnected(provider === 'google' ? 'email' : provider)
+      },
       async manageAccess(provider) {
         const url = ingestion().manageAccessUrl(provider)
         if (url) await openExternal(url)
@@ -125,24 +127,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       createApiToken: (name) => worker().createApiToken(name),
       revokeApiToken: (id) => worker().revokeApiToken(id),
       async sendTestActionable() {
-        const client = worker()
-        const token = await client.createApiToken('Gantry test')
-        try {
-          const body: CreateActionableRequest = {
-            title: 'Test actionable from Gantry',
-            body: 'Sent from Connections to verify API delivery.',
-            source: { name: 'Gantry test' },
-            external_id: `test-${Date.now()}`,
-          }
-          const res = await fetchImpl(new URL('/v1/actionables', client.baseUrl), {
-            method: 'POST',
-            headers: { authorization: `Bearer ${token.token}`, 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          })
-          if (!res.ok) throw new Error(`Test actionable failed (${res.status})`)
-        } finally {
-          await client.revokeApiToken(token.id).catch(() => undefined)
-        }
+        await worker().sendTestActionable()
         await deps.ingestion?.syncNow().catch(() => undefined)
       },
       endpoint: async () => new URL('/v1/actionables', settings.get().workerUrl).toString(),
@@ -175,7 +160,9 @@ export function createApi(deps: ApiDeps): GantryApi {
         const head = await git(path, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
         const defaultBranch =
           head.code === 0 ? head.output.trim().replace(/^origin\//, '') : (await git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).output.trim()
-        return repos.add({ path, remote, defaultBranch })
+        const repo = repos.add({ path, remote, defaultBranch })
+        board.repositoryRegistered()
+        return repo
       },
       update: async (id, patch) => repos.setSetupCommand(id, patch.setupCommand),
       remove: async (id) => repos.remove(id),

@@ -290,10 +290,23 @@ export class AgentRunner implements AgentControl {
     this.drain()
   }
 
-  // shortcut: resume ignores maxConcurrentAgents; queue resumes too if users hit the limit often.
   async resume(id: string, feedback?: string) {
     const a = this.board.must(id)
     assertAction(a, 'resume')
+    if (this.board.all().filter(isAgentActive).length >= this.deps.settings().maxConcurrentAgents) {
+      this.board.update(
+        id,
+        (c) => {
+          c.agentState = 'queued'
+          c.tags = unique([...c.tags, TAGS.queued])
+          const note = feedback?.trim()
+          if (c.dispatch!.sessionId) c.dispatch!.instructions = note || 'Continue.'
+          else if (note) c.dispatch!.instructions += `\n\n${note}`
+        },
+        { type: 'resumed', detail: feedback, actor: USER },
+      )
+      return
+    }
     await this.provider(a.dispatch!.provider).resume(id, feedback)
     this.board.update(id, (c) => (c.agentState = 'running'), { type: 'resumed', detail: feedback, actor: USER })
   }
