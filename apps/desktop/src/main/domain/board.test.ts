@@ -109,6 +109,19 @@ describe('api actionables', () => {
     expect(board.must('wrk-1').tags).not.toContain(TAGS.needsRepository)
   })
 
+  it('resolves deduped worker ids as aliases of the existing card', async () => {
+    const { board } = setup()
+    board.ingest(apiSignal())
+    board.ingest(apiSignal({ id: 'wrk-2' }))
+    expect(board.resolveTarget('wrk-2')?.id).toBe('wrk-1')
+    board.ingest(apiSignal({ id: 'wrk-3', metadata: { aliasIds: 5, autoStartOnRepository: true } }))
+    expect(board.must('wrk-1').metadata).toEqual({ aliasIds: ['wrk-2', 'wrk-3'] })
+    board.applyPatch('wrk-2', { title: 'Via alias' })
+    expect(board.must('wrk-1').title).toBe('Via alias')
+    board.dismiss('wrk-2')
+    await vi.waitFor(() => expect(board.must('wrk-1').dismissedAt).toBeDefined())
+  })
+
   it('tags Needs repository when no registered repository matches and skips auto start', () => {
     const { board } = setup()
     const start = vi.spyOn(board.agents!, 'start')
@@ -217,6 +230,33 @@ describe('housekeeping', () => {
     board.housekeeping()
     expect(board.must(id!).snoozedUntil).toBeUndefined()
     expect(eventTypes(id)).toEqual(['received', 'snoozed', 'unsnoozed'])
+  })
+
+  it('returns expired snoozes to To-do tagged Snoozed until the user acts', () => {
+    const { board, advance } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.createColumn('Later', 1)
+    const later = board.columns().find((c) => c.name === 'Later')!.id
+    board.move(id!, later, 0)
+    board.snooze(id!, '2026-10-27T13:00:00.000Z')
+    advance(HOUR)
+    board.housekeeping()
+    expect(board.must(id!)).toMatchObject({ column: 'todo', tags: expect.arrayContaining([TAGS.snoozed]) })
+    board.ingest(signal({ trigger: 'github.review_requested' }))
+    expect(board.must(id!).tags).toContain(TAGS.snoozed)
+    board.move(id!, 'todo', 0)
+    expect(board.must(id!).tags).not.toContain(TAGS.snoozed)
+  })
+
+  it('leaves cards finished while snoozed in Done', () => {
+    const { board, advance } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.snooze(id!, '2026-10-27T13:00:00.000Z')
+    board.markDone(id!)
+    advance(HOUR)
+    board.housekeeping()
+    expect(board.must(id!).column).toBe('done')
+    expect(board.must(id!).tags).not.toContain(TAGS.snoozed)
   })
 
   it('archives Done cards after archiveDoneAfterDays and prunes old activity', () => {
