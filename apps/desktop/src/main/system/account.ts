@@ -60,7 +60,11 @@ export class AccountService {
   async refresh() {
     const me = await this.worker()
       ?.me()
-      .catch(() => undefined)
+      .catch(async (err: unknown) => {
+        if (!(err instanceof WorkerError && err.status === 401)) return undefined
+        this.deps.secrets.delete(DEVICE_SECRET)
+        return (await this.ensureDevice()) ? this.worker()?.me().catch(() => undefined) : undefined
+      })
     if (me) this.save({ signedIn: me.signedIn, email: me.email, githubLogin: me.githubLogin })
   }
 
