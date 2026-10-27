@@ -110,7 +110,7 @@ Actionable {
 
 **Dedupe**: one card per external entity. A new trigger on an existing entity:
 - Adds the tag, updates body/links, bumps `updatedAt`.
-- If card is Done (resolved externally) or Snoozed → returns to To-do.
+- If card is Done (by user or resolved externally) or Snoozed → returns to To-do.
 - If dismissed by user → stays dismissed unless the trigger *type* is new for that card.
 
 ---
@@ -125,7 +125,7 @@ Actionable {
 - In Progress → To-do: Stop.
 - Review → Done: user clicks Done (triggers cleanup).
 - Review → In Progress: Reopen with feedback (resumes same session).
-- Any → Dismissed (archived; kills agent if running).
+- Any → Dismissed (archived; kills agent if running, using the same confirmation as Stop when "Confirm before stopping" is on).
 - Any → Snoozed (hidden; not allowed while agent running).
 - Manual move to custom columns: allowed from To-do, Review, Done, custom; from In Progress only when paused/stopped. Agents never run in a custom column.
 - Auto-resolve (GitHub only, per table in 8.1): To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only. Slack, Email, API, and manual cards never auto-resolve; they move only by user action.
@@ -162,13 +162,13 @@ Actionable {
 **Claude provider (v1)**
 - Detects `claude` on PATH; Welcome step 3 blocks until found.
 - Runs headless via Claude Agent SDK with streaming JSON. Session id stored for resume.
-- Worktree: `git worktree add <workspaceLocation>/<id>-<slug> -b gantry/<id>-<slug>` from the registered repo's default branch.
+- Worktree: `git worktree add <workspaceLocation>/<id>-<slug> -b gantry/<id>-<slug>` from the registered repo's default branch. Dispatch reuses the card's recorded worktree and branch if they exist (e.g. after Stop); a new one is created only when none is recorded.
 - Pause = interrupt, keep session + worktree. Resume = continue session. Stop = kill, keep worktree, card → To-do tagged `Stopped`.
 - Awaiting input = agent asked a question (AskUserQuestion / permission prompt); user answers in the details panel.
 - Open in terminal: `claude --resume <sessionId>` in the worktree via Terminal.app (or Orca if detected).
 - Completion: prompt instructs a final structured block (summary, files changed, branch, PR URL, tests run, open questions). Parsed into `result`; links auto-added. Failure → Review tagged `Failed` with error.
 
-**Dispatch sheet** (shown when "Confirm before dispatching" is on; otherwise defaults apply):
+**Dispatch sheet** (shown when "Confirm before dispatching" is on, and always when the repository cannot be inferred; otherwise defaults apply):
 - Instructions: auto-built from title, body, links, and fetched context (PR diff summary / Slack thread / email body). Editable.
 - Repository: inferred from source (GitHub remote match, API `repository`), else dropdown of registered repos.
 - Agent: provider + model.
@@ -231,9 +231,9 @@ Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories 
   "metadata": {}
 }
 ```
-Response: `{ id, url: "gantry://actionable/<id>" }`. Idempotent on `source.name + external_id` (updates existing). `auto_start: true` dispatches with defaults on arrival (respects concurrency limit).
+Response: `{ id, url: "gantry://actionable/<id>" }`. Idempotent on `source.name + external_id` (updates existing). `auto_start: true` dispatches with defaults on arrival, ignoring "Confirm before dispatching" (respects concurrency limit). If no registered repository matches `repository`, the card lands in To-do tagged `Needs repository`.
 
-Also: `GET /v1/actionables/:id`, `PATCH /v1/actionables/:id` (title/body/links/tags), `POST /v1/actionables/:id/dismiss`. "Send test actionable" button in Connections.
+Also: `PATCH /v1/actionables/:id` (title/body/links/tags) and `POST /v1/actionables/:id/dismiss`. The Worker holds no card data; these are queued as `update` / `dismiss` inbox items and applied by the app on its next poll. No GET. "Send test actionable" button in Connections.
 
 ---
 
@@ -247,7 +247,7 @@ Preferences › AI: provider (Anthropic · OpenAI · OpenAI-compatible URL), API
 
 One view, filterable by event type, source, date, text, and actionable. Live updates. Export JSON/CSV. Retention setting (default 90 days).
 
-Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate / ignored:llm), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed`, `failed`, `review`, `done`, `reopened`, `dismissed`, `snoozed`, `unsnoozed`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected), `api_token`, `settings`.
+Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate / ignored:llm), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed` (card enters Review), `failed`, `done`, `reopened`, `dismissed`, `snoozed`, `unsnoozed`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected).
 
 Every event stores `actionableId?`, `source`, `actor` (user / agent / source / Gantry), `title`, `detail`, `timestamp`. Clicking an event opens the card; the card panel lists its events.
 
@@ -257,7 +257,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Agent defaults**: default provider/model, workspace location, registered repositories, default permission preset, confirm before dispatching, confirm before stopping, max concurrent agents.
 
-**When work is done**: agent workspace — Delete / Keep / Ask each time (remote branches and PRs always kept). Keep completed actionables (on → auto-archive from Done after N days, default 7, searchable; off → removed from board on Done, still in Activity).
+**When work is done**: agent workspace — Delete / Keep / Ask each time. Delete runs `git worktree remove` on the card's recorded `worktreePath` only; remote branches and PRs are always kept. Keep completed actionables (on → auto-archive from Done after N days, default 7, searchable; off → removed from board on Done, still in Activity).
 
 **Snooze presets**: 1 h, 3 h, tomorrow 9 am, next Monday, custom.
 
@@ -269,7 +269,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Account**: name, sign-in status, device id, sign out.
 
-**Local data**: Delete all Gantry data — stops agents, deletes worktrees under workspace location, wipes SQLite and Keychain, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
+**Local data**: Delete all Gantry data — stops agents, removes only the worktrees Gantry created (paths recorded in `dispatch.worktreePath`, via `git worktree remove`), wipes SQLite and Keychain, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
 
 ---
 
@@ -285,7 +285,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 13. Worker
 
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
-- Routes: `POST /v1/actionables`, `GET/PATCH /v1/actionables/:id`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
+- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
 - Webhook signature verification (GitHub HMAC, Slack signing secret).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
 - OAuth access tokens are returned to the app on connect and stored in Keychain; Worker keeps refresh tokens only where polling must survive app restarts (GitHub App installation token minting, Google refresh). Webhook routing uses the grant → user mapping.
