@@ -131,11 +131,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const load = snapshotLoad.current
     if (load.running) return void (load.again = true)
     load.running = true
-    do {
-      load.again = false
-      setSnapshot(await api.board.snapshot(filterRef.current))
-    } while (load.again)
-    load.running = false
+    try {
+      do {
+        load.again = false
+        setSnapshot(await api.board.snapshot(filterRef.current))
+      } while (load.again)
+    } finally {
+      load.running = false
+    }
   }, [])
   const reloadSettings = useCallback(() => api.settings.get().then(setSettings), [])
   const reloadAccount = useCallback(() => api.account.get().then(setAccount), [])
