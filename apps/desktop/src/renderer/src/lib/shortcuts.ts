@@ -48,7 +48,7 @@ const PLAIN: Record<string, Shortcut> = {
   d: 'dismiss',
 }
 
-export function isTyping(target: EventTarget | null) {
+function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null
   if (!el || typeof el.tagName !== 'string') return false
   return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)

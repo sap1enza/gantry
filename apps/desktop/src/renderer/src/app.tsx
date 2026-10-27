@@ -126,7 +126,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const filterRef = useRef(filter)
   filterRef.current = filter
-  const reloadSnapshot = useCallback(() => api.board.snapshot(filterRef.current).then(setSnapshot), [])
+  const snapshotLoad = useRef<{ running: boolean; again: boolean }>({ running: false, again: false })
+  const reloadSnapshot = useCallback(async () => {
+    const load = snapshotLoad.current
+    if (load.running) return void (load.again = true)
+    load.running = true
+    do {
+      load.again = false
+      setSnapshot(await api.board.snapshot(filterRef.current))
+    } while (load.again)
+    load.running = false
+  }, [])
   const reloadSettings = useCallback(() => api.settings.get().then(setSettings), [])
   const reloadAccount = useCallback(() => api.account.get().then(setAccount), [])
   const reloadConnections = useCallback(() => api.connections.list().then(setConnections), [])
@@ -162,9 +172,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   useEffect(() => {
-    const root = document.documentElement
-    if (!settings || settings.appearance === 'system') delete root.dataset.theme
-    else root.dataset.theme = settings.appearance
+    const appearance = settings?.appearance ?? 'system'
+    const media = matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => (document.documentElement.dataset.theme = appearance === 'system' ? (media.matches ? 'dark' : 'light') : appearance)
+    apply()
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
   }, [settings?.appearance])
 
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
@@ -188,9 +201,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [ask],
   )
 
+  const actState = useRef({ settings, selectedId })
+  actState.current = { settings, selectedId }
   const act = useCallback(
     async (action: CardAction, a: Actionable, anchor?: HTMLElement) => {
       const id = a.id
+      const { settings, selectedId } = actState.current
       const confirmStop = settings?.confirmBeforeStop ?? true
       switch (action) {
         case 'start': {
@@ -245,7 +261,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return void (await run(api.board.move(id, 'todo', 0)))
       }
     },
-    [settings, run, confirm, ask, toast, open, selectedId],
+    [run, confirm, ask, toast, open],
   )
 
   const overlayOpen = !!(dialog || dispatchFor || snoozeFor || newOpen || searchOpen)
@@ -402,4 +418,4 @@ export function columnCards(s: BoardSnapshot, column: string, sort: Sort) {
   return cards.sort(sort === 'manual' ? (x, y) => x.position - y.position : SORTERS[sort])
 }
 
-export const orderedCards = (s: BoardSnapshot, sort: Sort) => s.columns.flatMap((c) => columnCards(s, c.id, sort))
+const orderedCards = (s: BoardSnapshot, sort: Sort) => s.columns.flatMap((c) => columnCards(s, c.id, sort))

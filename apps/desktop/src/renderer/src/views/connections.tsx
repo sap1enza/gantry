@@ -3,7 +3,7 @@ import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, Mail,
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ago, clock, Github, Modal, Popover, Tag, Toggle, usePopover } from '../ui'
+import { ago, clock, Github, Modal, Popover, Tag, toggle, Toggle, usePopover } from '../ui'
 
 const STATUS_LABEL = { connected: 'Connected', reconnect_required: 'Reconnect required', disconnected: 'Disconnected' } as const
 const TRIGGER_HINT: Partial<Record<TriggerId, string>> = {
@@ -144,7 +144,7 @@ function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settin
                   <input
                     type="checkbox"
                     checked={selected.includes(r.fullName)}
-                    onChange={() => setGithub({ repositories: selected.includes(r.fullName) ? selected.filter((x) => x !== r.fullName) : [...selected, r.fullName] })}
+                    onChange={() => setGithub({ repositories: toggle(selected, r.fullName) })}
                   />
                   {r.fullName}
                 </label>
@@ -239,7 +239,7 @@ function EmailCard({ info, settings }: { info: ConnectionInfo; settings: Setting
           <span className="grow muted">Exclude categories</span>
           {CATEGORIES.map((c) => (
             <label key={c} className="check">
-              <input type="checkbox" checked={e.excludeCategories.includes(c)} onChange={() => setEmail({ excludeCategories: e.excludeCategories.includes(c) ? e.excludeCategories.filter((x) => x !== c) : [...e.excludeCategories, c] })} />
+              <input type="checkbox" checked={e.excludeCategories.includes(c)} onChange={() => setEmail({ excludeCategories: toggle(e.excludeCategories, c) })} />
               {c[0]!.toUpperCase() + c.slice(1)}
             </label>
           ))}

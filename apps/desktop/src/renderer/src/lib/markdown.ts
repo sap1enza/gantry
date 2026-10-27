@@ -12,13 +12,13 @@ export type Block =
 
 const DANGEROUS_BLOCK = /<(script|style|iframe|object)\b[\s\S]*?(<\/\1\s*>|$)/gi
 
-export const stripHtml = (s: string) =>
+const stripHtml = (s: string) =>
   s
     .replace(DANGEROUS_BLOCK, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<\/?[a-z][^>]*>/gi, '')
 
-export const safeHref = (href: string) => (/^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : undefined)
+const safeHref = (href: string) => (/^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : undefined)
 
 const INLINE = /`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]+)\)|(?<![\w*])[*_](?!\s)(.+?)(?<!\s)[*_](?![\w*])|(https?:\/\/[^\s<)]+)/
 

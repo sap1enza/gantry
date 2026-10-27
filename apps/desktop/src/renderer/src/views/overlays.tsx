@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { SNOOZE_PRESETS, snoozeUntil } from '../lib/snooze'
-import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, SourceIcon, Tag } from '../ui'
+import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, SourceIcon, Tag } from '../ui'
 import { stateLabel } from './details'
 
 export function SearchPalette() {
@@ -48,10 +48,10 @@ export function SearchPalette() {
           {!query && <div className="palette-item muted">Searches every card, including Done, Dismissed, and Snoozed.</div>}
           {results.map((a, i) => (
             <div key={a.id} role="option" aria-selected={i === active} className={`palette-item ${i === active ? 'active' : ''}`} onMouseEnter={() => setActive(i)} onClick={() => choose(a)}>
-              <SourceIcon name={a.source.kind} />
+              <SourceIcon kind={a.source.kind} />
               <span className="mono muted">{a.displayId}</span>
               <span className="grow truncate">{a.title}</span>
-              <Tag>{stateLabel(a)}</Tag>
+              <Tag>{stateLabel(a, app.snapshot?.columns)}</Tag>
             </div>
           ))}
         </div>
@@ -232,7 +232,7 @@ export function DispatchSheet() {
           <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
             {preview.models.map((m) => (
               <option key={m.id} value={m.id}>
-                Claude Code · {m.label}
+                {PROVIDER_LABEL[preview.provider] ?? preview.provider} · {m.label}
               </option>
             ))}
           </select>

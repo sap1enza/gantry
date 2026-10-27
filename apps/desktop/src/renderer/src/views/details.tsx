@@ -1,21 +1,20 @@
-import { actionsFor, isAgentActive, type Actionable, type ActivityEvent, type AgentEvent, type TranscriptEntry } from '@gantry/shared'
+import { actionsFor, isAgentActive, isCustomColumn, type Actionable, type Column, type ActivityEvent, type AgentEvent, type TranscriptEntry } from '@gantry/shared'
 import { ArrowUpRight, ExternalLink, FileText, GitPullRequest, PanelRightClose } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, Modal, PRESET_LABEL, SOURCE_LABELS, SourceIcon, Tag } from '../ui'
+import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, Modal, PRESET_LABEL, SOURCE_LABELS, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
 
-const COLUMN_STATE: Record<string, string> = { todo: 'To-do', in_progress: 'In Progress', review: 'Ready for review', done: 'Done' }
-
-export function stateLabel(a: Actionable) {
+export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
   if (a.archivedAt) return 'Archived'
   if (a.snoozedUntil && new Date(a.snoozedUntil) > new Date()) return 'Snoozed'
   if (a.column === 'in_progress' && a.agentState) return a.agentState === 'running' ? 'Agent running' : AGENT_STATE_LABEL[a.agentState]
-  return COLUMN_STATE[a.column] ?? 'Manual column'
+  if (a.column === 'review') return 'Ready for review'
+  return columns.find((c) => c.id === a.column)?.name ?? (isCustomColumn(a.column) ? 'Custom column' : a.column)
 }
 
-export const describeAgentEvent = (e: AgentEvent): string | undefined => {
+const describeAgentEvent = (e: AgentEvent): string | undefined => {
   switch (e.type) {
     case 'message':
       return e.text
@@ -40,25 +39,25 @@ export const describeAgentEvent = (e: AgentEvent): string | undefined => {
 
 export function DetailsPanel({ id }: { id: string }) {
   const app = useApp()
-  const [card, setCard] = useState<Actionable>()
+  const fromSnapshot = app.snapshot?.actionables.find((a) => a.id === id)
+  const [fetched, setFetched] = useState<Actionable>()
+  const card = fromSnapshot ?? (fetched?.id === id ? fetched : undefined)
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [live, setLive] = useState<{ at: string; text: string }[]>([])
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState('')
   const [transcript, setTranscript] = useState<TranscriptEntry[]>()
 
-  const load = useCallback(async () => {
-    const [a, log] = await Promise.all([api.board.get(id), api.activity.list({ actionableId: id, limit: 6 })])
-    setCard(a)
-    setEvents(log.events)
-  }, [id])
+  const inSnapshot = !!fromSnapshot
+  const fetchCard = useCallback(() => void (!inSnapshot && api.board.get(id).then(setFetched)), [id, inSnapshot])
   useEffect(() => {
     setLive([])
     setAnswer('')
     setFeedback('')
-    void load()
-  }, [load])
-  usePush('board.changed', () => void load())
+    void api.activity.list({ actionableId: id, limit: 6 }).then((log) => setEvents(log.events))
+  }, [id])
+  useEffect(fetchCard, [fetchCard])
+  usePush('board.changed', fetchCard)
   usePush('activity.appended', ({ event }) => event.actionableId === id && setEvents((list) => [event, ...list].slice(0, 6)))
   usePush('agent.event', ({ actionableId, event }) => {
     const text = actionableId === id && describeAgentEvent(event)
@@ -87,17 +86,17 @@ export function DetailsPanel({ id }: { id: string }) {
         </button>
       </div>
       <div className="row">
-        <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card)}</Tag>
+        <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card, app.snapshot?.columns)}</Tag>
         <span className="small muted" style={{ marginLeft: 'auto' }}>
           Created {clock(card.createdAt)}
         </span>
       </div>
       <h2 className="selectable">{card.title}</h2>
       <div className="row small">
-        <SourceIcon name={card.source.kind} />
+        <SourceIcon kind={card.source.kind} />
         <span style={{ fontSize: 12 }}>{card.source.name}</span>
         <Tag>{card.source.kind === 'api' ? 'Custom API source' : SOURCE_LABELS[card.source.kind]}</Tag>
-        {card.priority && card.priority !== 'normal' && <Tag tone={card.priority === 'low' ? '' : 'red'}>{card.priority}</Tag>}
+        <PriorityTag priority={card.priority} />
       </div>
       {card.tags.length > 0 && (
         <div className="row wrap" style={{ gap: 6 }}>
@@ -150,7 +149,7 @@ export function DetailsPanel({ id }: { id: string }) {
           </div>
           <dl className="kv">
             <dt>Agent</dt>
-            <dd>Claude Code{d.model ? ` · ${d.model[0]!.toUpperCase()}${d.model.slice(1)}` : ''}</dd>
+            <dd>{PROVIDER_LABEL[d.provider] ?? d.provider}{d.model ? ` · ${d.model[0]!.toUpperCase()}${d.model.slice(1)}` : ''}</dd>
             <dt>Repository</dt>
             <dd>{d.repository}</dd>
             <dt>Workspace</dt>
@@ -173,42 +172,22 @@ export function DetailsPanel({ id }: { id: string }) {
             <>
               <Markdown source={r.summary} onLink={openLink} />
               <dl className="kv">
-                {r.filesChanged.length > 0 && (
-                  <>
-                    <dt>Files</dt>
-                    <dd className="mono">{r.filesChanged.map((f) => <div key={f}>{f}</div>)}</dd>
-                  </>
-                )}
-                {r.branch && (
-                  <>
-                    <dt>Branch</dt>
-                    <dd className="mono">{r.branch}</dd>
-                  </>
-                )}
-                {r.prUrl && (
-                  <>
-                    <dt>Pull request</dt>
-                    <dd>
-                      <a href={r.prUrl} onClick={(e) => (e.preventDefault(), openLink(r.prUrl!))}>
-                        {r.prUrl.replace(/^https:\/\/github\.com\//, '')}
-                      </a>
-                    </dd>
-                  </>
-                )}
-                {r.testsRun && (
-                  <>
-                    <dt>Tests</dt>
-                    <dd>{r.testsRun}</dd>
-                  </>
-                )}
-                {d && (
-                  <>
-                    <dt>Cost</dt>
-                    <dd>
-                      ${d.costUsd.toFixed(2)} · {Math.round(d.inputTokens / 1000)}k in / {(d.outputTokens / 1000).toFixed(1)}k out
-                    </dd>
-                  </>
-                )}
+                {(
+                  [
+                    ['Files', r.filesChanged.length > 0 && <span className="mono">{r.filesChanged.map((f) => <div key={f}>{f}</div>)}</span>],
+                    ['Branch', r.branch && <span className="mono">{r.branch}</span>],
+                    ['Pull request', r.prUrl && <a href={r.prUrl} onClick={(e) => (e.preventDefault(), openLink(r.prUrl!))}>{r.prUrl.replace(/^https:\/\/github\.com\//, '')}</a>],
+                    ['Tests', r.testsRun],
+                    ['Cost', d && `$${d.costUsd.toFixed(2)} · ${Math.round(d.inputTokens / 1000)}k in / ${(d.outputTokens / 1000).toFixed(1)}k out`],
+                  ] as [string, ReactNode][]
+                )
+                  .filter(([, v]) => v)
+                  .map(([label, v]) => (
+                    <Fragment key={label}>
+                      <dt>{label}</dt>
+                      <dd>{v}</dd>
+                    </Fragment>
+                  ))}
               </dl>
               {r.openQuestions.length > 0 && (
                 <div className="box">

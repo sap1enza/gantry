@@ -1,9 +1,9 @@
-import { EVENT_TYPES, type ActivityEvent, type ActivityQuery, type EventType } from '@gantry/shared'
+import { EVENT_TYPES, SOURCE_KINDS, type SourceKind, type ActivityEvent, type ActivityQuery, type EventType } from '@gantry/shared'
 import { Calendar, ChevronDown, Download, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { clockSeconds, Popover, SourceIcon, Tag, usePopover } from '../ui'
+import { clockSeconds, Popover, SOURCE_LABELS, SourceIcon, Tag, toggle, usePopover } from '../ui'
 
 const TYPE_LABEL: Record<EventType, string> = {
   received: 'Received',
@@ -50,6 +50,12 @@ const RANGES = [
   { id: '30d', label: 'Last 30 days', days: 30 },
   { id: 'all', label: 'All time', days: -1 },
 ] as const
+
+const iconKind = (e: ActivityEvent): SourceKind | 'agent' => {
+  const name = e.source.toLowerCase()
+  if (e.actor.kind === 'agent' || name === 'claude code') return 'agent'
+  return name === 'google' ? 'email' : (SOURCE_KINDS.find((k) => name === k || name === SOURCE_LABELS[k].toLowerCase()) ?? 'api')
+}
 
 const sinceFor = (days: number) => {
   if (days < 0) return undefined
@@ -113,7 +119,6 @@ export function ActivityView() {
     const path = await app.run(api.activity.export(format, { ...query, cursor: undefined, limit: undefined }))
     if (path) app.toast(`Exported to ${path}`)
   }
-  const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
   const sourceOptions = [...new Set([...sources, ...events.map((e) => e.source)])].sort()
   const chip = CHIPS.find((c) => (c.types ?? []).join() === types.join())
 
@@ -170,7 +175,7 @@ export function ActivityView() {
               {sourceOptions.map((s) => (
                 <label key={s} className="menu-item check">
                   <input type="checkbox" checked={sources.includes(s)} onChange={() => setSources(toggle(sources, s))} />
-                  <SourceIcon name={s} /> {s}
+                  {s}
                 </label>
               ))}
             </Popover>
@@ -232,7 +237,7 @@ export function ActivityView() {
                 <Tag tone={TYPE_TONE[e.type]}>{TYPE_LABEL[e.type]}</Tag>
               </span>
               <span className="row" style={{ gap: 7 }}>
-                <SourceIcon name={e.source} /> <span className="truncate">{e.source}</span>
+                <SourceIcon kind={iconKind(e)} /> <span className="truncate">{e.source}</span>
               </span>
               <span className="col" style={{ gap: 3, minWidth: 0, padding: '10px 12px 10px 0' }}>
                 <span className="row" style={{ gap: 6 }}>

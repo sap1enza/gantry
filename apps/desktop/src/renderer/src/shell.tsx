@@ -6,19 +6,13 @@ import { ConnectionsView } from './views/connections'
 import { DispatchSheet, NameModal, NewActionableModal, SearchPalette, SnoozeMenu } from './views/overlays'
 import { PreferencesView } from './views/preferences'
 import { TriageView } from './views/triage'
-import { initials, SourceIcon } from './ui'
+import { initials, INPUTS, SOURCE_LABELS, SourceIcon } from './ui'
 
 const NAV: { view: View; label: string; icon: typeof Activity }[] = [
   { view: 'triage', label: 'Triage', icon: Columns3 },
   { view: 'activity', label: 'Activity', icon: Activity },
   { view: 'connections', label: 'Connections', icon: Plug },
 ]
-const INPUTS = [
-  { provider: 'github', label: 'GitHub' },
-  { provider: 'slack', label: 'Slack' },
-  { provider: 'google', label: 'Email' },
-  { provider: 'api', label: 'API' },
-] as const
 const TITLES: Record<View, string> = { triage: 'Triage', activity: 'Activity', connections: 'Connections', preferences: 'Preferences' }
 
 export function Shell() {
@@ -63,13 +57,16 @@ export function Shell() {
           </button>
         ))}
         <div className="eyebrow">Inputs</div>
-        {INPUTS.map(({ provider, label }) => (
-          <button key={provider} className="input-row" onClick={() => app.go('connections')}>
-            <SourceIcon name={label} />
-            {label}
-            <span className={`dot ${app.connections.find((c) => c.provider === provider)?.status ?? ''}`} title={app.connections.find((c) => c.provider === provider)?.status.replace('_', ' ')} />
-          </button>
-        ))}
+        {INPUTS.map(({ provider, kind }) => {
+          const status = app.connections.find((c) => c.provider === provider)?.status
+          return (
+            <button key={provider} className="input-row" onClick={() => app.go('connections')}>
+              <SourceIcon kind={kind} />
+              {SOURCE_LABELS[kind]}
+              <span className={`dot ${status ?? ''}`} title={status?.replace('_', ' ')} />
+            </button>
+          )
+        })}
         <div className="spacer" />
         {stats && (stats.running > 0 || stats.paused > 0 || stats.completedToday > 0 || stats.costTodayUsd > 0) && (
           <div className="status-block" role="status">

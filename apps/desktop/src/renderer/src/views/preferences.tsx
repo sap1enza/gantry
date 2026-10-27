@@ -19,12 +19,12 @@ function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; ch
   )
 }
 
-function Group({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+function Group({ title, sub, children, className = 'rows' }: { title: string; sub?: string; children: ReactNode; className?: string }) {
   return (
     <div className="group">
       <h2>{title}</h2>
       {sub ? <p className="section-sub">{sub}</p> : <div style={{ height: 12 }} />}
-      <div className="rows">{children}</div>
+      <div className={className}>{children}</div>
     </div>
   )
 }
@@ -237,10 +237,7 @@ export function PreferencesView() {
               </Row>
             </Group>
 
-            <div className="group">
-              <h2>Local data</h2>
-              <div style={{ height: 12 }} />
-              <div className="rows danger-box" style={{ borderColor: 'var(--red-bg)' }}>
+            <Group title="Local data" className="rows danger-box">
                 <Row
                   title="Delete all Gantry data"
                   hint={
@@ -255,15 +252,11 @@ export function PreferencesView() {
                     <Trash2 size={13} /> Delete all data…
                   </button>
                 </Row>
-              </div>
-            </div>
+            </Group>
           </div>
 
           <div>
-            <div className="group">
-              <h2>General</h2>
-              <div style={{ height: 12 }} />
-              <div className="rows">
+            <Group title="General">
                 <Row title="Launch at login">
                   <Toggle label="Launch at login" checked={s.launchAtLogin} onChange={(v) => set({ launchAtLogin: v })} />
                 </Row>
@@ -286,8 +279,7 @@ export function PreferencesView() {
                   <input className="field" type="number" min={1} style={{ width: 64 }} aria-label="Activity retention days" value={s.activityRetentionDays} onChange={(e) => Number(e.target.value) >= 1 && set({ activityRetentionDays: Number(e.target.value) })} />
                   <span className="small muted">days</span>
                 </Row>
-              </div>
-            </div>
+            </Group>
 
             <div className="note group">
               <FolderCheck size={18} color="var(--accent)" />
@@ -297,10 +289,7 @@ export function PreferencesView() {
               <span className="small">Need to inspect a result locally? Choose “Keep agent workspace” in the completion setting.</span>
             </div>
 
-            <div className="group">
-              <h2>Account</h2>
-              <div style={{ height: 12 }} />
-              <div className="rows">
+            <Group title="Account">
                 <Row title="Name">
                   <input className="field" style={{ width: 180 }} aria-label="Name" defaultValue={acc?.name} key={acc?.name} onBlur={async (e) => e.target.value.trim() && e.target.value !== acc?.name && (await app.run(api.account.setName(e.target.value.trim())), await app.reloadAccount())} />
                 </Row>
@@ -346,21 +335,16 @@ export function PreferencesView() {
                 <Row title="Device">
                   <span className="mono muted selectable">{acc?.deviceId ?? '—'}</span>
                 </Row>
-              </div>
-            </div>
+            </Group>
 
-            <div className="group">
-              <h2 id="shortcuts">Keyboard shortcuts</h2>
-              <div style={{ height: 12 }} />
-              <div className="shortcuts">
+            <Group title="Keyboard shortcuts" className="shortcuts">
                 {SHORTCUT_LIST.map(([k, label]) => (
                   <Fragment key={k}>
                     <kbd>{k}</kbd>
                     <span>{label}</span>
                   </Fragment>
                 ))}
-              </div>
-            </div>
+            </Group>
 
             <div className="col small muted" style={{ gap: 6 }}>
               <b style={{ color: 'var(--text)', fontSize: 12 }}>Gantry for macOS</b>

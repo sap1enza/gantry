@@ -1,4 +1,4 @@
-import type { Actionable, CardAction, SourceKind } from '@gantry/shared'
+import type { Actionable, CardAction, Priority, SourceKind } from '@gantry/shared'
 import {
   Check,
   Clock,
@@ -27,7 +27,7 @@ export function Github(props: LucideProps) {
   )
 }
 
-export const SOURCE_ICONS: Record<SourceKind, (p: LucideProps) => ReactNode> = {
+const SOURCE_ICONS: Record<SourceKind, (p: LucideProps) => ReactNode> = {
   github: Github,
   slack: Hash,
   email: Mail,
@@ -35,13 +35,25 @@ export const SOURCE_ICONS: Record<SourceKind, (p: LucideProps) => ReactNode> = {
   manual: PencilLine,
 }
 export const SOURCE_LABELS: Record<SourceKind, string> = { github: 'GitHub', slack: 'Slack', email: 'Email', api: 'API', manual: 'Manual' }
+export const INPUTS = [
+  { provider: 'github', kind: 'github' },
+  { provider: 'slack', kind: 'slack' },
+  { provider: 'google', kind: 'email' },
+  { provider: 'api', kind: 'api' },
+] as const
 
-export function SourceIcon({ name, size = 13 }: { name: string; size?: number }) {
-  const n = name.toLowerCase()
-  if (n.includes('claude')) return <SquareTerminal size={size} />
-  const kind = (Object.keys(SOURCE_LABELS) as SourceKind[]).find((k) => n.includes(k) || n.includes(SOURCE_LABELS[k].toLowerCase()))
-  const Icon = SOURCE_ICONS[n.includes('google') ? 'email' : (kind ?? 'api')]
+export function SourceIcon({ kind, size = 13 }: { kind: SourceKind | 'agent'; size?: number }) {
+  const Icon = kind === 'agent' ? SquareTerminal : SOURCE_ICONS[kind]
   return <Icon size={size} />
+}
+
+export const sourceLabel = (s: Actionable['source']) => (s.kind === 'api' ? `${s.name} · API` : [...new Set([SOURCE_LABELS[s.kind], s.name])].join(' · '))
+
+export const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+
+export function PriorityTag({ priority }: { priority?: Priority }) {
+  if (!priority || priority === 'normal') return null
+  return <Tag tone={priority === 'low' ? '' : 'red'}>{priority[0]!.toUpperCase() + priority.slice(1)}</Tag>
 }
 
 export const ACTION_META: Record<CardAction, { label: string; icon: (p: LucideProps) => ReactNode }> = {
@@ -79,7 +91,7 @@ const TAG_TONE: [RegExp, string][] = [
   [/completed|resolved|connected|enabled/i, 'green'],
   [/running/i, 'blue'],
 ]
-export const toneFor = (text: string) => TAG_TONE.find(([re]) => re.test(text))?.[1] ?? ''
+const toneFor = (text: string) => TAG_TONE.find(([re]) => re.test(text))?.[1] ?? ''
 
 export function Tag({ children, tone }: { children: ReactNode; tone?: string }) {
   return <span className={`tag ${tone ?? (typeof children === 'string' ? toneFor(children) : '')}`}>{children}</span>
@@ -251,6 +263,8 @@ export const AGENT_STATE_LABEL: Record<NonNullable<Actionable['agentState']>, st
   failed: 'Failed',
   stopped: 'Stopped',
 }
+
+export const PROVIDER_LABEL: Record<string, string> = { claude: 'Claude Code' }
 
 export const PRESET_LABEL = { read_only: 'Read-only', edit_test: 'Edit + test', full: 'Full' } as const
 export const PRESET_HINT = {

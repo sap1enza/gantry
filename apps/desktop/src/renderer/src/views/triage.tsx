@@ -1,9 +1,9 @@
-import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, type Actionable, type CardFieldVisibility, type Column } from '@gantry/shared'
-import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, X } from 'lucide-react'
-import { useState, type DragEvent } from 'react'
-import { columnCards, useApp, type Sort } from '../app'
+import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, TAGS, type Actionable, type BoardSnapshot, type CardFieldVisibility, type Column, type ColumnId } from '@gantry/shared'
+import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal } from 'lucide-react'
+import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
+import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, SOURCE_LABELS, SourceIcon, Tag, useNow, usePopover } from '../ui'
+import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover } from '../ui'
 import { DetailsPanel } from './details'
 import { Welcome, WelcomeBanner } from './welcome'
 
@@ -26,13 +26,29 @@ const SORTS: { value: Sort; label: string }[] = [
 ]
 
 type Drag = { kind: 'card'; card: Actionable } | { kind: 'column'; id: string }
+type DropAt = { column: string; before?: string }
+
+const canDropOn = (card: Actionable, column: ColumnId) => column !== 'in_progress' && canMove(card, column)
+
+function FieldChecks({ fields, keys, itemClass, onToggle }: { fields: CardFieldVisibility; keys: typeof FIELD_LABELS; itemClass: string; onToggle: (k: keyof CardFieldVisibility) => void }) {
+  return (
+    <>
+      <label className={itemClass}>
+        <input type="checkbox" checked disabled /> Title
+      </label>
+      {keys.map(([k, label]) => (
+        <label key={k} className={itemClass}>
+          <input type="checkbox" checked={fields[k]} onChange={() => onToggle(k)} /> {label}
+        </label>
+      ))}
+    </>
+  )
+}
 
 export function TriageView() {
   const app = useApp()
   const s = app.snapshot
   const fields = app.settings?.cardFields
-  const [drag, setDrag] = useState<Drag>()
-  const [dropAt, setDropAt] = useState<{ column: string; before?: string }>()
   const fieldsPop = usePopover()
 
   if (!s || !fields) return null
@@ -42,24 +58,6 @@ export function TriageView() {
   const addColumn = async () => {
     const name = await app.promptText('Add column', 'Column name')
     if (name) await app.run(api.columns.create(name, s.columns.length))
-  }
-
-  const allowed = (column: Column) => (drag?.kind === 'card' ? column.id !== 'in_progress' && canMove(drag.card, column.id) : drag?.kind === 'column')
-  const onDrop = async (e: DragEvent, column: Column, beforeId?: string) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const d = drag
-    setDrag(undefined)
-    setDropAt(undefined)
-    if (!d) return
-    if (d.kind === 'column') {
-      const target = s.columns.findIndex((c) => c.id === column.id)
-      return void (await app.run(api.columns.move(d.id, target)))
-    }
-    if (!allowed(column)) return
-    const list = columnCards(s, column.id, 'manual').filter((c) => c.id !== d.card.id)
-    const index = beforeId ? list.findIndex((c) => c.id === beforeId) : list.length
-    await app.run(api.board.move(d.card.id, column.id, index < 0 ? list.length : index))
   }
 
   return (
@@ -88,14 +86,7 @@ export function TriageView() {
         {fieldsPop.anchor && (
           <Popover anchor={fieldsPop.anchor} onClose={fieldsPop.close} align="right">
             <div className="menu-label">Card fields</div>
-            <label className="menu-item check">
-              <input type="checkbox" checked disabled /> Title
-            </label>
-            {FIELD_LABELS.map(([k, label]) => (
-              <label key={k} className="menu-item check">
-                <input type="checkbox" checked={fields[k]} onChange={() => toggleField(k)} /> {label}
-              </label>
-            ))}
+            <FieldChecks fields={fields} keys={FIELD_LABELS} itemClass="menu-item check" onToggle={toggleField} />
           </Popover>
         )}
       </div>
@@ -105,61 +96,11 @@ export function TriageView() {
       <div className="triage">
         <div className="board-wrap">
           <Toolbar />
-          <div className="board">
-            {s.columns.map((column) => {
-              const cards = columnCards(s, column.id, app.sort)
-              const Icon = FIXED_ICON[column.id] ?? GripVertical
-              const dropClass = drag ? (allowed(column) ? (dropAt?.column === column.id ? 'drop-ok' : '') : 'drop-no') : ''
-              return (
-                <section
-                  key={column.id}
-                  className={`column ${dropClass} ${drag?.kind === 'column' && drag.id === column.id ? 'dragging' : ''}`}
-                  aria-label={column.name}
-                  onDragOver={(e) => {
-                    if (!allowed(column)) return
-                    e.preventDefault()
-                    if (dropAt?.column !== column.id || dropAt.before) setDropAt({ column: column.id })
-                  }}
-                  onDrop={(e) => onDrop(e, column)}
-                >
-                  <ColumnHead column={column} count={cards.length} icon={Icon} onDragStart={() => setDrag({ kind: 'column', id: column.id })} onDragEnd={() => (setDrag(undefined), setDropAt(undefined))} />
-                  {cards.map((card) => (
-                    <Card
-                      key={card.id}
-                      card={card}
-                      fields={fields}
-                      columns={s.columns}
-                      dropBefore={drag?.kind === 'card' && dropAt?.column === column.id && dropAt.before === card.id}
-                      onDragStart={() => setDrag({ kind: 'card', card })}
-                      onDragEnd={() => (setDrag(undefined), setDropAt(undefined))}
-                      onDragOver={(e) => {
-                        if (drag?.kind !== 'card' || !allowed(column) || column.id === 'in_progress') return
-                        e.preventDefault()
-                        e.stopPropagation()
-                        if (dropAt?.before !== card.id) setDropAt({ column: column.id, before: card.id })
-                      }}
-                      onDrop={(e) => onDrop(e, column, card.id)}
-                    />
-                  ))}
-                </section>
-              )
-            })}
-            <div className="board-hint">
-              <GripVertical size={14} />
-              Drag to reorder custom columns.
-            </div>
-          </div>
+          <Board snapshot={s} fields={fields} />
           <div className="board-footer">
             <div className="row wrap">
               <span className="eyebrow">Card fields</span>
-              <label className="check">
-                <input type="checkbox" checked disabled /> Title
-              </label>
-              {FIELD_LABELS.slice(0, 4).map(([k, label]) => (
-                <label key={k} className="check">
-                  <input type="checkbox" checked={fields[k]} onChange={() => toggleField(k)} /> {label}
-                </label>
-              ))}
+              <FieldChecks fields={fields} keys={FIELD_LABELS.slice(0, 4)} itemClass="check" onToggle={toggleField} />
             </div>
             <div className="row">
               <Lock size={11} /> To-do → In Progress → Review → Done are fixed and follow agent execution. Custom columns are manual.
@@ -169,6 +110,96 @@ export function TriageView() {
         {app.panelOpen && app.selectedId && <DetailsPanel id={app.selectedId} />}
       </div>
     </>
+  )
+}
+
+function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardFieldVisibility }) {
+  const { sort, selectedId, act, open, select, run } = useApp()
+  const [drag, setDrag] = useState<Drag>()
+  const [dropAt, setDropAt] = useState<DropAt>()
+  const byColumn = useMemo(() => new Map(s.columns.map((c) => [c.id, columnCards(s, c.id, sort)])), [s, sort])
+  const live = useRef({ s, drag, dropAt })
+  live.current = { s, drag, dropAt }
+
+  const allowed = (d: Drag | undefined, column: ColumnId) => (d?.kind === 'card' ? canDropOn(d.card, column) : d?.kind === 'column')
+  const endDrag = useCallback(() => (setDrag(undefined), setDropAt(undefined)), [])
+  const hover = (next: DropAt) => {
+    const cur = live.current.dropAt
+    if (cur?.column !== next.column || cur.before !== next.before) setDropAt(next)
+  }
+  const drop = useCallback(
+    async (e: DragEvent, column: ColumnId, beforeId?: string) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const { s, drag: d } = live.current
+      endDrag()
+      if (!d) return
+      if (d.kind === 'column') return void (await run(api.columns.move(d.id, s.columns.findIndex((c) => c.id === column))))
+      if (!canDropOn(d.card, column)) return
+      const list = columnCards(s, column, 'manual').filter((c) => c.id !== d.card.id)
+      const index = beforeId ? list.findIndex((c) => c.id === beforeId) : -1
+      await run(api.board.move(d.card.id, column, index < 0 ? list.length : index))
+    },
+    [run, endDrag],
+  )
+  const cardHandlers = useMemo<CardHandlers>(
+    () => ({
+      act,
+      open,
+      select,
+      run,
+      dragStart: (card) => setDrag({ kind: 'card', card }),
+      dragEnd: endDrag,
+      dragOver: (e, card) => {
+        const d = live.current.drag
+        if (d?.kind !== 'card' || card.column === 'in_progress' || !canDropOn(d.card, card.column)) return
+        e.preventDefault()
+        e.stopPropagation()
+        hover({ column: card.column, before: card.id })
+      },
+      drop: (e, card) => drop(e, card.column, card.id),
+    }),
+    [act, open, select, run, endDrag, drop],
+  )
+
+  return (
+    <div className="board">
+      {s.columns.map((column) => {
+        const cards = byColumn.get(column.id) ?? []
+        const ok = allowed(drag, column.id)
+        const dropClass = drag ? (ok ? (dropAt?.column === column.id ? 'drop-ok' : '') : 'drop-no') : ''
+        return (
+          <section
+            key={column.id}
+            className={`column ${dropClass} ${drag?.kind === 'column' && drag.id === column.id ? 'dragging' : ''}`}
+            aria-label={column.name}
+            onDragOver={(e) => {
+              if (!allowed(live.current.drag, column.id)) return
+              e.preventDefault()
+              hover({ column: column.id })
+            }}
+            onDrop={(e) => drop(e, column.id)}
+          >
+            <ColumnHead column={column} count={cards.length} icon={FIXED_ICON[column.id] ?? GripVertical} onDragStart={() => setDrag({ kind: 'column', id: column.id })} onDragEnd={endDrag} />
+            {cards.map((card) => (
+              <Card
+                key={card.id}
+                card={card}
+                fields={fields}
+                columns={s.columns}
+                selected={selectedId === card.id}
+                dropBefore={drag?.kind === 'card' && dropAt?.column === column.id && dropAt.before === card.id}
+                on={cardHandlers}
+              />
+            ))}
+          </section>
+        )
+      })}
+      <div className="board-hint">
+        <GripVertical size={14} />
+        Drag to reorder custom columns.
+      </div>
+    </div>
   )
 }
 
@@ -196,8 +227,8 @@ function Toolbar() {
           </button>
           {SOURCE_KINDS.map((k) => (
             <label key={k} className="menu-item check">
-              <input type="checkbox" checked={sources.includes(k)} onChange={() => setSources(sources.includes(k) ? sources.filter((x) => x !== k) : [...sources, k])} />
-              <SourceIcon name={k} /> {SOURCE_LABELS[k]}
+              <input type="checkbox" checked={sources.includes(k)} onChange={() => setSources(toggle(sources, k))} />
+              <SourceIcon kind={k} /> {SOURCE_LABELS[k]}
             </label>
           ))}
           <div className="menu-sep" />
@@ -211,16 +242,18 @@ function Toolbar() {
       )}
       <button className="btn sm" onClick={(e) => agentPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
-        {f.providers?.length ? 'Claude Code' : 'All agents'}
+        {f.providers?.length ? f.providers.map((p) => PROVIDER_LABEL[p] ?? p).join(', ') : 'All agents'}
       </button>
       {agentPop.anchor && (
         <Popover anchor={agentPop.anchor} onClose={agentPop.close}>
           <button className={`menu-item ${!f.providers ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: undefined }), agentPop.close())}>
             All agents
           </button>
-          <button className={`menu-item ${f.providers ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: ['claude'] }), agentPop.close())}>
-            <SquareTerminal size={13} /> Claude Code
-          </button>
+          {Object.entries(PROVIDER_LABEL).map(([id, label]) => (
+            <button key={id} className={`menu-item ${f.providers?.includes(id) ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: [id] }), agentPop.close())}>
+              <SquareTerminal size={13} /> {label}
+            </button>
+          ))}
         </Popover>
       )}
       <select className="select" style={{ height: 25, fontSize: 11 }} aria-label="Sort" value={app.sort} onChange={(e) => app.setSort(e.target.value as Sort)}>
@@ -312,62 +345,50 @@ function statusTags(card: Actionable, now: number): string[] {
   else if ((card.column === 'done' || card.column === 'review') && state === 'completed') out.push(`Completed · ${clock(card.doneAt ?? card.updatedAt)}`)
   if (card.dismissedAt) out.push('Dismissed')
   if (card.snoozedUntil && new Date(card.snoozedUntil).getTime() > now) out.push(`Snoozed until ${clock(card.snoozedUntil)}`)
-  const tags = card.tags.filter((t) => t !== 'AI detected')
-  if (card.tags.includes('AI detected') && tags.length) tags[0] = `${tags[0]} · AI detected`
-  else if (card.tags.includes('AI detected')) tags.push('AI detected')
+  const tags = card.tags.filter((t) => t !== TAGS.aiDetected)
+  if (card.tags.includes(TAGS.aiDetected)) tags.length ? (tags[0] = `${tags[0]} · ${TAGS.aiDetected}`) : tags.push(TAGS.aiDetected)
   return [...out, ...tags]
 }
 
-function Card({
-  card,
-  fields,
-  columns,
-  dropBefore,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDrop,
-}: {
-  card: Actionable
-  fields: CardFieldVisibility
-  columns: Column[]
-  dropBefore: boolean
-  onDragStart: () => void
-  onDragEnd: () => void
-  onDragOver: (e: DragEvent) => void
-  onDrop: (e: DragEvent) => void
-}) {
-  const app = useApp()
+interface CardHandlers {
+  act: AppState['act']
+  open: AppState['open']
+  select: AppState['select']
+  run: AppState['run']
+  dragStart: (card: Actionable) => void
+  dragEnd: () => void
+  dragOver: (e: DragEvent, card: Actionable) => void
+  drop: (e: DragEvent, card: Actionable) => void
+}
+
+const Card = memo(function Card({ card, fields, columns, selected, dropBefore, on }: { card: Actionable; fields: CardFieldVisibility; columns: Column[]; selected: boolean; dropBefore: boolean; on: CardHandlers }) {
   const menu = usePopover()
   const now = useNow(1000, card.agentState === 'running')
   const actions = card.column === 'done' ? [] : actionsFor(card)
-  const draggable = !card.dismissedAt && (card.column !== 'in_progress' || card.agentState === 'paused' || card.agentState === 'stopped')
-  const selected = app.selectedId === card.id
-  const moveTargets = columns.filter((c) => c.id !== card.column && c.id !== 'in_progress' && canMove(card, c.id))
+  const moveTargets = columns.filter((c) => c.id !== card.column && canDropOn(card, c.id))
   const tags = fields.status ? statusTags(card, now) : []
   if (fields.status && !tags.length && isCustomColumn(card.column)) tags.push('Manual column')
+  const priority = fields.priority && <PriorityTag priority={card.priority} />
 
   return (
     <article
       className={`card ${selected ? 'selected' : ''} ${dropBefore ? 'drop-before' : ''}`}
-      draggable={draggable}
+      draggable={moveTargets.length > 0}
       tabIndex={0}
       aria-label={card.title}
-      onClick={() => app.open(card.id)}
-      onFocus={() => app.select(card.id)}
-      onDragStart={(e) => (e.dataTransfer.setData('text/plain', card.id), (e.dataTransfer.effectAllowed = 'move'), onDragStart())}
-      onDragEnd={onDragEnd}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      onClick={() => on.open(card.id)}
+      onFocus={() => on.select(card.id)}
+      onDragStart={(e) => (e.dataTransfer.setData('text/plain', card.id), (e.dataTransfer.effectAllowed = 'move'), on.dragStart(card))}
+      onDragEnd={on.dragEnd}
+      onDragOver={(e) => on.dragOver(e, card)}
+      onDrop={(e) => on.drop(e, card)}
       style={card.dismissedAt ? { opacity: 0.6 } : undefined}
     >
       <div className="card-meta">
         {fields.source && (
           <>
-            <SourceIcon name={card.source.kind} size={12} />
-            <span className="truncate">
-              {card.source.kind === 'api' ? `${card.source.name} · API` : [...new Set([SOURCE_LABELS[card.source.kind], card.source.name])].join(' · ')}
-            </span>
+            <SourceIcon kind={card.source.kind} size={12} />
+            <span className="truncate">{sourceLabel(card.source)}</span>
           </>
         )}
         {fields.receivedTime && <span>{fields.source ? '· ' : ''}{clock(card.createdAt)}</span>}
@@ -379,48 +400,50 @@ function Card({
       {!card.links.length && card.body && <div className="small muted">{card.body.replace(/[*_`>#]/g, '').slice(0, 140)}</div>}
       {fields.links &&
         card.links.slice(0, 2).map((l) => (
-          <a key={l.url} className="card-link" href={l.url} onClick={(e) => (e.preventDefault(), e.stopPropagation(), void app.run(api.board.openLink(l.url)))}>
+          <a key={l.url} className="card-link" href={l.url} onClick={(e) => (e.preventDefault(), e.stopPropagation(), void on.run(api.board.openLink(l.url)))}>
             <ExternalLink size={11} />
             <span className="truncate">{l.label}</span>
           </a>
         ))}
       {fields.repository && card.repository && <span className="mono muted">{card.repository}</span>}
-      {(tags.length > 0 || (fields.priority && card.priority)) && (
+      {(tags.length > 0 || priority) && (
         <div className="row wrap" style={{ gap: 6 }}>
           {tags.map((t) => (
             <Tag key={t}>{t}</Tag>
           ))}
-          {fields.priority && card.priority && <Tag tone={card.priority === 'urgent' || card.priority === 'high' ? 'red' : ''}>{card.priority[0]!.toUpperCase() + card.priority.slice(1)}</Tag>}
+          {priority}
         </div>
       )}
       {fields.agent && card.dispatch && card.column === 'in_progress' && (
         <div className="card-agent">
-          <SquareTerminal size={11} /> Claude Code · {card.dispatch.worktreePath.split('/').at(-1)}
+          <SquareTerminal size={11} /> {PROVIDER_LABEL[card.dispatch.provider] ?? card.dispatch.provider} · {card.dispatch.worktreePath.split('/').at(-1)}
           {card.agentState && !['running', 'paused'].includes(card.agentState) && <span className="faint">· {AGENT_STATE_LABEL[card.agentState]}</span>}
         </div>
       )}
       {actions.length > 0 && (
         <div className="card-actions">
           {actions.map((a) => (
-            <ActionButton key={a} action={a} onClick={(el) => app.act(a, card, el)} />
+            <ActionButton key={a} action={a} onClick={(el) => on.act(a, card, el)} />
           ))}
         </div>
       )}
       {menu.anchor && (
         <Popover anchor={menu.anchor} onClose={menu.close} align="right">
-          <button className="menu-item" onClick={() => (menu.close(), app.open(card.id))}>
+          <button className="menu-item" onClick={() => (menu.close(), on.open(card.id))}>
             Open details
           </button>
           {card.column === 'done' &&
-            actionsFor(card).map((a) => (
-              <button key={a} className="menu-item" onClick={() => (menu.close(), app.act(a, card))}>
-                {a === 'dismiss' ? <X size={12} /> : null}
-                {a === 'reopen_todo' ? 'Reopen to To-do' : 'Dismiss'}
-              </button>
-            ))}
+            actionsFor(card).map((a) => {
+              const { label, icon: Icon } = ACTION_META[a]
+              return (
+                <button key={a} className="menu-item" onClick={() => (menu.close(), on.act(a, card))}>
+                  <Icon size={12} /> {label}
+                </button>
+              )
+            })}
           {moveTargets.length > 0 && <div className="menu-label">Move to</div>}
           {moveTargets.map((c) => (
-            <button key={c.id} className="menu-item" onClick={() => (menu.close(), app.run(api.board.move(card.id, c.id, 0)))}>
+            <button key={c.id} className="menu-item" onClick={() => (menu.close(), void on.run(api.board.move(card.id, c.id, 0)))}>
               {c.name}
             </button>
           ))}
@@ -428,4 +451,4 @@ function Card({
       )}
     </article>
   )
-}
+})

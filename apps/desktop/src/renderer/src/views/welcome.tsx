@@ -2,25 +2,21 @@ import { TRIGGERS, type OAuthProvider } from '@gantry/shared'
 import { ArrowUpRight, Check, CircleCheck, CircleDashed, CircleDot, CircleHelp, Inbox, Lock, Pause, Plus, ShieldCheck, SlidersHorizontal, SquareTerminal, Webhook, X } from 'lucide-react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { Github, SourceIcon } from '../ui'
+import { Github, INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
 
-const INPUTS: { provider: OAuthProvider; label: string; hint: string }[] = [
-  { provider: 'github', label: 'GitHub', hint: 'Pull requests, issues, and alerts' },
-  { provider: 'slack', label: 'Slack', hint: 'Mentions and follow-ups' },
-  { provider: 'google', label: 'Email', hint: 'New inbox messages' },
-]
-const KIND_OF = { github: 'github', slack: 'slack', google: 'email' } as const
+const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
+const OAUTH_INPUTS = INPUTS.filter((i) => i.provider !== 'api') as Extract<(typeof INPUTS)[number], { provider: OAuthProvider }>[]
 
-export function useSetupProgress() {
+function useSetupProgress() {
   const app = useApp()
   const connected = app.connections.filter((c) => c.provider !== 'api' && c.status === 'connected')
   const triggersChosen = connected.some((c) =>
-    Object.entries(TRIGGERS).some(([id, t]) => t.source === KIND_OF[c.provider as OAuthProvider] && app.settings?.triggers[id as keyof typeof TRIGGERS]),
+    Object.entries(TRIGGERS).some(([id, t]) => t.source === INPUTS.find((i) => i.provider === c.provider)?.kind && app.settings?.triggers[id as keyof typeof TRIGGERS]),
   )
   const canDispatch = !!app.checks?.claude.available && (app.checks?.repositories ?? 0) > 0
   const dispatched = !!app.snapshot?.actionables.some((a) => a.dispatch)
   const steps = [connected.length > 0, triggersChosen, canDispatch && dispatched]
-  return { steps, done: steps.filter(Boolean).length, canDispatch, connected }
+  return { steps, done: steps.filter(Boolean).length, canDispatch }
 }
 
 export function WelcomeBanner() {
@@ -80,12 +76,12 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
             <span className="step-n">{steps[0] ? <Check size={12} /> : 1}</span> Connect your inputs
           </h3>
           <span className="muted">Start with one. You can add more connections later.</span>
-          {INPUTS.map(({ provider, label, hint }, i) => (
+          {OAUTH_INPUTS.map(({ provider, kind }, i) => (
             <div key={provider} className="row">
-              <SourceIcon name={label} size={17} />
+              <SourceIcon kind={kind} size={17} />
               <div className="grow">
-                <b>{label}</b>
-                <div className="tiny muted">{hint}</div>
+                <b>{SOURCE_LABELS[kind]}</b>
+                <div className="tiny muted">{HINTS[provider]}</div>
               </div>
               {statusOf(provider) === 'connected' ? (
                 <span className="tag green">Connected</span>
