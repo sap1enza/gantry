@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "gantry"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "929cd1d9-e81d-4c12-9dfd-aff7f0ac2071"
 migrations_dir = "migrations"
 
 [triggers]
