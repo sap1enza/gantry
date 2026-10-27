@@ -5,7 +5,7 @@ import migration from '../migrations/0001_init.sql?raw'
 import { createApp } from './app'
 import { hmacSha256Hex } from './crypto'
 import type { Env } from './env'
-import { deleteExpired } from './store'
+import { deleteExpired, updateGrantTokens } from './store'
 
 let mf: Miniflare
 let env: Env
@@ -257,16 +257,15 @@ describe('oauth', () => {
   })
 
   it('returns the rotated token when a concurrent refresh already used the refresh token', async () => {
-    const { auth } = await registerDevice()
+    const { auth, userId } = await registerDevice()
     mockGithubOAuth(undefined, { expires_in: 60 })
     await connect(auth, 'github')
-    fetchMock.mockResolvedValueOnce(json({ access_token: 'gho_first', refresh_token: 'ghr_2', expires_in: 28800 }))
-    fetchMock.mockResolvedValueOnce(json({ error: 'bad_refresh_token' }))
-    const [a, b] = await Promise.all([
-      call('/v1/grants/github/refresh', { method: 'POST', auth }),
-      call('/v1/grants/github/refresh', { method: 'POST', auth }),
-    ])
-    expect([a.status, b.status]).toEqual([200, 200])
+    fetchMock.mockImplementationOnce(async () => {
+      await updateGrantTokens(env, userId, 'github', { accessToken: 'gho_other', refreshToken: 'ghr_other', scopes: [] })
+      return json({ error: 'bad_refresh_token' })
+    })
+    const res = await call('/v1/grants/github/refresh', { method: 'POST', auth })
+    expect(await res.json()).toMatchObject({ accessToken: 'gho_other' })
     expect((await me(auth)).grants[0]!.status).toBe('connected')
   })
 
