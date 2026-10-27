@@ -1,4 +1,5 @@
 import {
+  SECRET_KEYS,
   TRIGGERS,
   WorkerError,
   type ConnectionInfo,
@@ -62,7 +63,7 @@ export function createCtx(deps: IngestionDeps) {
   const settings = (): Settings => deps.getSettings()
 
   const grant = (p: OAuthProvider): GrantTokenResponse | undefined => {
-    const raw = deps.secrets.get(`grant.${p}`)
+    const raw = deps.secrets.get(SECRET_KEYS.grant(p))
     return raw ? (JSON.parse(raw) as GrantTokenResponse) : undefined
   }
 
@@ -78,7 +79,7 @@ export function createCtx(deps: IngestionDeps) {
   }
 
   function storeGrant(g: GrantTokenResponse) {
-    deps.secrets.set(`grant.${g.provider}`, JSON.stringify(g))
+    deps.secrets.set(SECRET_KEYS.grant(g.provider), JSON.stringify(g))
     const { login, name, team, avatarUrl } = g.account
     setConnection(g.provider, { status: 'connected', account: { login, name, team, avatarUrl }, detail: undefined })
   }
@@ -162,7 +163,7 @@ export function createCtx(deps: IngestionDeps) {
   }
 
   function llmVerdict(instruction: string, content: string): Promise<Verdict> {
-    return classify(settings().llm, deps.secrets.get('llm.apiKey'), instruction, content)
+    return classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), instruction, content)
   }
 
   return {

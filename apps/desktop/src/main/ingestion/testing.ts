@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type GrantTokenResponse, type IngestSink, type OAuthProvider, type Settings, type WorkerClient } from '@gantry/shared'
+import { DEFAULT_SETTINGS, SECRET_KEYS, type GrantTokenResponse, type IngestSink, type OAuthProvider, type Settings, type WorkerClient } from '@gantry/shared'
 import { vi } from 'vitest'
 import type { IngestionDeps } from '../contracts'
 import { createCtx } from './context'
@@ -35,7 +35,7 @@ export function grantFor(provider: OAuthProvider, account: { id: string; login: 
 }
 
 export function connectedCtx(deps: ReturnType<typeof fakeDeps>, ...grants: GrantTokenResponse[]) {
-  for (const g of grants) deps.secrets.set(`grant.${g.provider}`, JSON.stringify(g))
+  for (const g of grants) deps.secrets.set(SECRET_KEYS.grant(g.provider), JSON.stringify(g))
   return createCtx(deps)
 }
 

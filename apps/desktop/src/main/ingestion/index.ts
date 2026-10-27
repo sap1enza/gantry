@@ -1,4 +1,4 @@
-import type { Actionable, ConnectionInfo, InboxItem, OAuthProvider } from '@gantry/shared'
+import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
 import { createCtx, NotConnectedError, ThrottledError, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
@@ -46,6 +46,7 @@ export async function handleInboxItem(ctx: Ctx, item: InboxItem) {
       const r = p.request
       const name = r.source?.name ?? 'API'
       await ctx.emit({
+        id: p.id,
         trigger: 'api.custom',
         source: { kind: 'api', name, icon: r.source?.icon },
         externalKey: `${name}:${r.external_id ?? p.id}`,
@@ -72,7 +73,7 @@ export async function handleInboxItem(ctx: Ctx, item: InboxItem) {
         await ctx.refresh(p.provider)
         return
       }
-      if (p.status === 'disconnected') ctx.deps.secrets.delete(`grant.${p.provider}`)
+      if (p.status === 'disconnected') ctx.deps.secrets.delete(SECRET_KEYS.grant(p.provider))
       return ctx.setConnection(p.provider, { status: p.status })
     case 'github.webhook':
       return githubWebhook(ctx, p.event, p.payload as Parameters<typeof githubWebhook>[2])
@@ -153,7 +154,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     },
     async disconnect(provider) {
       await deps.worker()?.revokeGrant(provider)
-      deps.secrets.delete(`grant.${provider}`)
+      deps.secrets.delete(SECRET_KEYS.grant(provider))
       for (const key of PROVIDER_KV[provider]) deps.kv.delete(key)
       ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
     },

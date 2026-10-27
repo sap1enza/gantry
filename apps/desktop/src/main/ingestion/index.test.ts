@@ -22,7 +22,7 @@ describe('pollInbox', () => {
     const deps = fakeDeps(worker)
     await pollInbox(createCtx(deps), new Map())
     expect(deps.sink.ingest.mock.calls.map(([s]) => s.externalKey)).toEqual(['Honeybadger:hb-1', 'Honeybadger:gen-2'])
-    expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ trigger: 'api.custom', source: { kind: 'api', name: 'Honeybadger' }, autoStart: true, actor: 'ci' })
+    expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ id: 'gen-1', trigger: 'api.custom', source: { kind: 'api', name: 'Honeybadger' }, autoStart: true, actor: 'ci' })
     expect(deps.sink.dismiss).toHaveBeenCalledWith('Honeybadger:hb-1')
     expect(worker.ack).toHaveBeenCalledWith(['1', '2', '3'])
   })
