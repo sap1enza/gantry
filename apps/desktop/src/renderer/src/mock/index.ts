@@ -92,8 +92,9 @@ export function createMockBridge(opts: MockOptions = {}): GantryBridge & { state
     const ev = AGENT_SCRIPT[i]
     if (ev) {
       agentEvent(a, ev)
-      if (ev.type === 'usage' && a.dispatch) a.dispatch.costUsd += ev.costUsd
-      else if (ev.type !== 'usage') log('agent_update', a, ev.type === 'message' ? ev.text : ev.summary, { source: 'Claude Code', actor: { kind: 'agent', name: 'Agent' }, detail: a.dispatch?.worktreePath })
+      if (ev.type === 'usage') {
+        if (a.dispatch) a.dispatch.costUsd += ev.costUsd
+      } else log('agent_update', a, ev.type === 'message' ? ev.text : ev.type === 'tool' ? ev.summary : ev.type, { source: 'Claude Code', actor: { kind: 'agent', name: 'Agent' }, detail: a.dispatch?.worktreePath })
       steps.set(id, i + 1)
       timers.set(id, setTimeout(() => step(id), stepMs))
       touch(a)
