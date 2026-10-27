@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type ActivityEvent } from '@gantry/shared'
+import { DEEP_LINKS, DEFAULT_SETTINGS, type ActivityEvent } from '@gantry/shared'
 import { describe, expect, it, vi } from 'vitest'
 import { openDb } from '../db'
 import { createSecretStore, jsonTable } from '../db/stores'
@@ -9,10 +9,17 @@ import { notificationFor } from './notifications'
 
 describe('parseDeepLink', () => {
   it('extracts the actionable id and rejects other links', () => {
-    expect(parseDeepLink('gantry://actionable/0b5c-uuid')).toBe('0b5c-uuid')
-    expect(parseDeepLink('gantry://actionable/GT-012/')).toBe('GT-012')
+    expect(parseDeepLink('gantry://actionable/0b5c-uuid')).toEqual({ kind: 'actionable', id: '0b5c-uuid' })
+    expect(parseDeepLink('gantry://actionable/GT-012/')).toEqual({ kind: 'actionable', id: 'GT-012' })
     expect(parseDeepLink('gantry://settings')).toBeUndefined()
     expect(parseDeepLink('https://actionable/x')).toBeUndefined()
+  })
+
+  it('routes auth completion codes and rejects malformed ones', () => {
+    expect(parseDeepLink(DEEP_LINKS.authComplete('Ab_9-xY'))).toEqual({ kind: 'authComplete', code: 'Ab_9-xY' })
+    expect(parseDeepLink('gantry://auth/complete?code=')).toBeUndefined()
+    expect(parseDeepLink('gantry://auth/complete?code=a%27b')).toBeUndefined()
+    expect(parseDeepLink('https://auth/complete?code=abc')).toBeUndefined()
   })
 })
 
@@ -66,5 +73,15 @@ describe('AccountService', () => {
     expect(await account.ensureDevice()).toBe(true)
     expect(account.get().deviceId).toBe('d1')
     expect(account.worker()).toBeDefined()
+  })
+
+  it('asks for a name before signing in', async () => {
+    const db = openDb(':memory:')
+    const account = new AccountService({
+      meta: jsonTable(db, 'meta'),
+      secrets: createSecretStore(db, { encrypt: (v) => Buffer.from(v), decrypt: (b) => Buffer.from(b).toString() }),
+      workerUrl: () => 'http://worker.test',
+    })
+    await expect(account.signIn('github', async () => {})).rejects.toThrow('Set your name first')
   })
 })

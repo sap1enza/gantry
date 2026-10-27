@@ -1,4 +1,4 @@
-import { WorkerClient, type Account, type WorkerCredentials } from '@gantry/shared'
+import { WorkerClient, WorkerError, type Account, type WorkerCredentials } from '@gantry/shared'
 import type { KeyValueStore, SecretStore } from '../contracts'
 
 type AccountRecord = Omit<Account, 'deviceId'>
@@ -65,6 +65,7 @@ export class AccountService {
   }
 
   async signIn(method: 'github' | 'email', openExternal: (url: string) => Promise<void>, email?: string) {
+    if (!this.record().name) throw new Error('Set your name first')
     if (!(await this.ensureDevice())) throw new Error('Gantry Worker is unreachable')
     const worker = this.worker()!
     if (method === 'github') return openExternal(await worker.oauthStartUrl('github_signin'))
@@ -75,8 +76,10 @@ export class AccountService {
   async completeAuth(code: string) {
     const worker = this.worker()
     if (!worker) throw new Error('Gantry Worker is unreachable')
-    const result = await worker.completeAuth(code.trim())
-    if (result.kind === 'signin') await this.refresh()
+    const result = await worker.completeAuth(code.trim()).catch((err: unknown) => {
+      throw err instanceof WorkerError && err.status === 400 ? new Error('That code is invalid or expired') : err
+    })
+    await this.refresh()
     return result
   }
 
