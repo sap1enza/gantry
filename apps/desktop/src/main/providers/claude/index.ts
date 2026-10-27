@@ -3,7 +3,9 @@ import type { AskUserQuestionInput } from '@anthropic-ai/claude-agent-sdk/sdk-to
 import type { AgentEventSink, AgentProvider, AgentState, DispatchRequest } from '@gantry/shared'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { accessSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { summarizeTool, toEvents } from './events'
 import { decide, presetOptions } from './policy'
@@ -11,6 +13,7 @@ import { decide, presetOptions } from './policy'
 export interface ClaudeDeps {
   query: typeof sdkQuery
   exec: (file: string, args: string[], options: { env: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>
+  claudePath?: () => string | undefined
 }
 
 interface Run {
@@ -26,12 +29,28 @@ interface Run {
   done: Promise<void>
 }
 
-const defaultDeps: ClaudeDeps = { query: sdkQuery, exec: promisify(execFile) }
-
 const agentEnv = (): NodeJS.ProcessEnv => ({
   ...process.env,
   PATH: [process.env.PATH, `${homedir()}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'].filter(Boolean).join(':'),
 })
+
+const isExecutable = (path: string) => {
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export const findClaude = (path = agentEnv().PATH ?? '') =>
+  path
+    .split(':')
+    .filter(Boolean)
+    .map((dir) => join(dir, 'claude'))
+    .find(isExecutable)
+
+const defaultDeps: ClaudeDeps = { query: sdkQuery, exec: promisify(execFile), claudePath: findClaude }
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
 
@@ -102,6 +121,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
           resume: run.sessionId,
           abortController: run.abort,
           env: agentEnv(),
+          pathToClaudeCodeExecutable: deps.claudePath?.(),
           canUseTool: canUseTool(run),
           ...presetOptions(run.request.permissionPreset),
         },

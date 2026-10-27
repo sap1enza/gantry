@@ -2,7 +2,10 @@ import type { Options, PermissionResult, Query, SDKMessage, SDKUserMessage } fro
 import type { AgentEvent, DispatchRequest, PermissionPreset } from '@gantry/shared'
 import { execFileSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
-import { createClaudeProvider, resumeCommand, shellQuote, type ClaudeDeps } from './index'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createClaudeProvider, findClaude, resumeCommand, shellQuote, type ClaudeDeps } from './index'
 
 const SESSION = 'b7e4c1d2-5a3f-4e8b-9c0d-1e2f3a4b5c6d'
 const init = { type: 'system', subtype: 'init', session_id: SESSION } as SDKMessage
@@ -214,5 +217,16 @@ describe('shellQuote', () => {
 
   it('builds the resume command', () => {
     expect(resumeCommand("/a b/c'd", 'abc')).toBe(`cd '/a b/c'\\''d' && claude --resume 'abc'`)
+  })
+})
+
+describe('findClaude', () => {
+  it('returns the first executable claude on the path and skips non-executables', () => {
+    const plain = mkdtempSync(join(tmpdir(), 'claude-'))
+    const exec = mkdtempSync(join(tmpdir(), 'claude-'))
+    writeFileSync(join(plain, 'claude'), '', { mode: 0o644 })
+    writeFileSync(join(exec, 'claude'), '', { mode: 0o755 })
+    expect(findClaude(`${plain}:${exec}`)).toBe(join(exec, 'claude'))
+    expect(findClaude(plain)).toBeUndefined()
   })
 })
