@@ -56,4 +56,42 @@ describe('pollGmail', () => {
     expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ trigger: 'email.new', externalKey: 't1', title: 'Review' })
     expect(deps.kv.get('gmail.historyId')).toBe('555')
   })
+
+  it('retries a message that failed transiently on the next poll without holding back the rest', async () => {
+    const deps = fakeDeps()
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me@acme.com' }))
+    deps.kv.set('gmail.historyId', '100')
+    const flaky = { status: 503 }
+    routeFetch([
+      ['/history?', () => res({ history: [{ messagesAdded: [{ message: { id: 'm1' } }, { message: { id: 'm2' } }] }], historyId: '200' })],
+      ['/messages/m1', () => (flaky.status === 200 ? res(msg(['INBOX', 'UNREAD'])) : res({}, flaky.status))],
+      ['/messages/m2', () => res({ ...msg(['INBOX', 'UNREAD']), id: 'm2', threadId: 't2' })],
+    ])
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await pollGmail(ctx)
+    expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['t2'])
+    expect(deps.kv.get('gmail.retry')).toEqual(['m1'])
+    expect(deps.kv.get('gmail.historyId')).toBe('200')
+    flaky.status = 200
+    routeFetch([
+      ['/history?', () => res({ historyId: '201' })],
+      ['/messages/m1', () => res(msg(['INBOX', 'UNREAD']))],
+    ])
+    await pollGmail(ctx)
+    expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['t2', 't1'])
+    expect(deps.kv.get('gmail.retry')).toEqual([])
+  })
+
+  it('queues the rest of the batch when throttled mid-way', async () => {
+    const deps = fakeDeps()
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me@acme.com' }))
+    deps.kv.set('gmail.historyId', '100')
+    routeFetch([
+      ['/history?', () => res({ history: [{ messagesAdded: [{ message: { id: 'm1' } }, { message: { id: 'm2' } }] }], historyId: '200' })],
+      [/\/messages\/m\d/, () => res({ error: { errors: [{ reason: 'rateLimitExceeded' }] } }, 403)],
+    ])
+    await expect(pollGmail(ctx)).rejects.toThrow('throttled')
+    expect(deps.kv.get('gmail.retry')).toEqual(['m1', 'm2'])
+    expect(deps.kv.get('gmail.historyId')).toBe('200')
+  })
 })

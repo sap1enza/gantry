@@ -1,7 +1,7 @@
 import { WorkerError, type InboxItem, type WorkerClient } from '@gantry/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { backoffUntil, createCtx, ThrottledError } from './context'
-import { createIngestion, pollInbox } from './index'
+import { createIngestion, pollInbox, serial } from './index'
 import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -60,6 +60,16 @@ describe('pollInbox', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await pollInbox(createCtx(deps), new Map([['2', 4]]))
     expect(worker.ack).toHaveBeenCalledWith(['2', '3'])
+  })
+
+  it('gives up on a worker inbox call that hangs', async () => {
+    vi.useFakeTimers()
+    const worker = { inbox: vi.fn(() => new Promise<never>(() => {})) }
+    const polled = pollInbox(createCtx(fakeDeps(worker)), new Map())
+    const assertion = expect(polled).rejects.toThrow('Timed out')
+    await vi.advanceTimersByTimeAsync(20_000)
+    await assertion
+    vi.useRealTimers()
   })
 
   it('stores the refreshed grant when a connection arrives', async () => {
@@ -154,6 +164,34 @@ describe('tokens and rate limits', () => {
     expect(deps.sink.logConnection.mock.calls.filter(([, s]) => s === 'throttled')).toHaveLength(1)
   })
 
+  it('sends every provider request with a timeout signal', async () => {
+    const ctx = connectedCtx(fakeDeps(), grantFor('github', { id: '1', login: 'lucas' }))
+    const fetch = routeFetch([['api.github.com', () => res({})]])
+    await ctx.json('github', 'https://api.github.com/a')
+    expect(fetch.mock.calls[0]![1]!.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('treats a Gmail 403 rateLimitExceeded as throttling', async () => {
+    const deps = fakeDeps()
+    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }))
+    const fetch = routeFetch([['gmail', () => res({ error: { code: 403, errors: [{ reason: 'userRateLimitExceeded' }] } }, 403)]])
+    await expect(ctx.json('google', 'https://gmail.googleapis.com/a')).rejects.toBeInstanceOf(ThrottledError)
+    await expect(ctx.json('google', 'https://gmail.googleapis.com/b')).rejects.toBeInstanceOf(ThrottledError)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs ignored:llm with the reason when the LLM is misconfigured, but rethrows transient failures', async () => {
+    const deps = fakeDeps()
+    deps.secrets.set('llm.apiKey', 'k')
+    const ctx = createCtx(deps)
+    const signal = { trigger: 'email.new', source: { kind: 'email', name: 'Gmail' }, externalKey: 't', title: 'x', occurredAt: '' } as const
+    routeFetch([['api.anthropic.com', () => res({}, 404)]])
+    await ctx.emit(signal, { llm: { instruction: 'i', content: 'c' } })
+    expect(deps.sink.logIgnored).toHaveBeenCalledWith(signal, 'ignored:llm', 'LLM request failed: HTTP 404')
+    routeFetch([['api.anthropic.com', () => res({}, 529)]])
+    await expect(ctx.emit(signal, { llm: { instruction: 'i', content: 'c' } })).rejects.toThrow('HTTP 529')
+  })
+
   it('logs ignored:llm when the gate has no API key', async () => {
     const deps = fakeDeps()
     const ctx = createCtx(deps)
@@ -163,7 +201,37 @@ describe('tokens and rate limits', () => {
   })
 })
 
+describe('serial', () => {
+  it('coalesces runs that queue while one is in progress', async () => {
+    const run = serial()
+    let release!: () => void
+    const first = vi.fn(() => new Promise<void>((r) => (release = r)))
+    const next = vi.fn(async () => {})
+    void run(first)
+    await vi.waitFor(() => expect(first).toHaveBeenCalled())
+    void run(next)
+    const last = run(next)
+    release()
+    await last
+    expect(next).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('createIngestion', () => {
+  it('keeps polling the inbox while a reconcile job hangs', async () => {
+    vi.useFakeTimers()
+    const worker = workerWith([])
+    const deps = fakeDeps(worker)
+    deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'lucas' })))
+    routeFetch([['api.github.com', () => new Promise<never>(() => {}) as never]])
+    const ingestion = createIngestion(deps)
+    ingestion.start()
+    await vi.advanceTimersByTimeAsync(15_000)
+    ingestion.stop()
+    vi.useRealTimers()
+    expect(worker.inbox).toHaveBeenCalledTimes(2)
+  })
+
   it('opens the worker OAuth start URL on connect and revokes on disconnect', async () => {
     const worker = { oauthStartUrl: vi.fn(async () => 'https://worker/oauth/slack/start?x'), revokeGrant: vi.fn(async () => undefined) }
     const deps = fakeDeps(worker)

@@ -328,7 +328,7 @@ const RESOLVE_REASON: Partial<Record<TriggerId, string>> = {
 }
 
 export async function applyReconciliation(ctx: Ctx, current: Current, prev = active(ctx)) {
-  const next: ActiveKeys = { ...prev }
+  const next: ActiveKeys = {}
   for (const [trigger, reason] of Object.entries(RESOLVE_REASON) as [TriggerId, string][]) {
     const cur = current[trigger]
     if (!cur || !ctx.triggerOn(trigger)) continue
@@ -337,7 +337,12 @@ export async function applyReconciliation(ctx: Ctx, current: Current, prev = act
     if (cur.complete) for (const key of before) if (!cur.signals.has(key)) ctx.deps.sink.resolve({ trigger, externalKey: key, reason })
     next[trigger] = [...new Set([...(cur.complete ? [] : before), ...cur.signals.keys()])]
   }
-  ctx.deps.kv.set('github.active', next)
+  const latest = active(ctx)
+  for (const [trigger, keys] of Object.entries(next) as [TriggerId, string[]][]) {
+    const addedMeanwhile = (latest[trigger] ?? []).filter((k) => !prev[trigger]?.includes(k))
+    latest[trigger] = [...new Set([...keys, ...addedMeanwhile])]
+  }
+  ctx.deps.kv.set('github.active', latest)
 }
 
 async function unlessFailed<T>(fn: () => Promise<T>) {
@@ -368,7 +373,27 @@ export async function reconcileGithub(ctx: Ctx) {
   if (ctx.triggerOn('github.dependabot')) current['github.dependabot'] = await unlessFailed(async () => openAlerts(ctx, settings, await repoNames()))
   if (!assignedOnly && ctx.triggerOn('github.issue')) current['github.issue'] = await unlessFailed(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? []))
   await applyReconciliation(ctx, current, prev)
+  await backfillMentions(ctx, me)
   await reconcileMentions(ctx, me)
+}
+
+async function backfillMentions(ctx: Ctx, me: string) {
+  if (!ctx.triggerOn('github.mention')) return
+  const scannedAt = ctx.iso()
+  const since = ctx.deps.kv.get<string>('github.mentionsSince') ?? scannedAt
+  const { nodes } = await searchAll(ctx, `...on Issue { ${NODE} } ...on PullRequest { ${NODE} }`, `mentions:${me} is:open archived:false updated:>=${since}`)
+  let complete = true
+  for (const n of nodes) {
+    const repo = n.repository.nameWithOwner
+    if (repoFilter(ctx.settings(), repo) || active(ctx)['github.mention']?.includes(n.url)) continue
+    try {
+      if (!(await mentionResolution(ctx, me, n.url))) await emitTracked(ctx, signal(ctx, 'github.mention', { html_url: n.url, number: n.number, title: n.title }, repo))
+    } catch (e) {
+      skipUnlessFatal(e)
+      complete = false
+    }
+  }
+  if (complete) ctx.deps.kv.set('github.mentionsSince', scannedAt)
 }
 
 async function openAlerts(ctx: Ctx, settings: Settings, repos: string[]): Promise<Tracked> {

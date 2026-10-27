@@ -1,6 +1,6 @@
 import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider, type SourceKind } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
-import { createCtx, NotConnectedError, ThrottledError, type Ctx } from './context'
+import { createCtx, NotConnectedError, ThrottledError, withTimeout, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
 import { emailContext, pollGmail } from './gmail'
 import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
@@ -10,9 +10,9 @@ const MAX_ITEM_ATTEMPTS = 5
 const MAX_CONTEXT = 8_000
 const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
-  github: ['github.active', 'github.issuesSince'],
-  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt'],
-  google: ['gmail.historyId'],
+  github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
+  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt', 'slack.seenEvents'],
+  google: ['gmail.historyId', 'gmail.retry'],
 }
 const SOURCE_KIND: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
@@ -101,7 +101,7 @@ function contextFor(ctx: Ctx, a: Actionable) {
 export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
   const worker = ctx.deps.worker()
   if (!worker) return
-  const { items } = await worker.inbox()
+  const { items } = await withTimeout(worker.inbox())
   const handled: string[] = []
   for (const item of items) {
     try {
@@ -120,7 +120,21 @@ export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
     }
     handled.push(item.id)
   }
-  if (handled.length) await worker.ack(handled)
+  if (handled.length) await withTimeout(worker.ack(handled))
+}
+
+export function serial() {
+  let tail: Promise<void> = Promise.resolve()
+  let waiting = false
+  return (run: () => Promise<void>, force = false) => {
+    if (waiting && !force) return tail
+    waiting = true
+    tail = tail.then(() => {
+      waiting = false
+      return run()
+    })
+    return tail
+  }
 }
 
 export function createIngestion(deps: IngestionDeps): Ingestion {
@@ -128,10 +142,10 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
   const nextRun = new Map<string, number>()
   const failures = new Map<string, number>()
   let timer: ReturnType<typeof setInterval> | undefined
-  let busy: Promise<void> = Promise.resolve()
+  const inbox = serial()
+  const jobs = serial()
 
-  async function tick(force: boolean) {
-    await pollInbox(ctx, failures).catch(report)
+  async function runJobs(force: boolean) {
     for (const job of JOBS) {
       if (!ctx.account(job.provider) || (!force && (nextRun.get(job.name) ?? 0) > ctx.now())) continue
       nextRun.set(job.name, ctx.now() + job.interval())
@@ -144,7 +158,9 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     }
   }
 
-  const schedule = (force: boolean) => (busy = busy.then(() => tick(force)))
+  async function schedule(force: boolean) {
+    await Promise.all([inbox(() => pollInbox(ctx, failures).catch(report)), jobs(() => runJobs(force), force)])
+  }
 
   return {
     start() {
