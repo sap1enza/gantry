@@ -4,6 +4,7 @@ import { openDb } from '../db'
 import { createSecretStore, jsonTable } from '../db/stores'
 import { inferRepository, parseRemote } from '../domain/repositories'
 import { AccountService } from './account'
+import { loginItemSync } from './login-item'
 import { parseDeepLink } from './deeplink'
 import { notificationFor } from './notifications'
 
@@ -83,5 +84,23 @@ describe('AccountService', () => {
       workerUrl: () => 'http://worker.test',
     })
     await expect(account.signIn('github', async () => {})).rejects.toThrow('Set your name first')
+  })
+})
+
+describe('loginItemSync', () => {
+  it('skips the default off value, applies changes once, and logs failures once', () => {
+    const set = vi.fn((on: boolean) => {
+      if (on) throw new Error('Operation not permitted')
+    })
+    const log = vi.fn()
+    const sync = loginItemSync(set, log)
+    sync(false)
+    expect(set).not.toHaveBeenCalled()
+    sync(true)
+    sync(true)
+    sync(false)
+    sync(true)
+    expect(set.mock.calls).toEqual([[true], [false], [true]])
+    expect(log).toHaveBeenCalledTimes(1)
   })
 })

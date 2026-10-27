@@ -77,6 +77,9 @@ const mergeLinks = (current: Link[], incoming: Link[]) => [...current, ...incomi
 const sourceActor = (signal: IngestSignal): Actor => ({ kind: 'source', name: signal.actor ?? signal.source.name })
 const insertAt = <T>(xs: T[], index: number, x: T) => xs.splice(Math.max(0, Math.min(index, xs.length)), 0, x)
 export const hasLiveAgent = (a: Pick<Actionable, 'column' | 'agentState'>) => a.column === 'in_progress' && a.agentState !== 'stopped'
+const INTERNAL_METADATA = ['aliasIds', 'autoStartOnRepository']
+const MAX_ALIASES = 20
+const externalMetadata = (m: Record<string, unknown> = {}) => Object.fromEntries(Object.entries(m).filter(([k]) => !INTERNAL_METADATA.includes(k)))
 const parseRow = (row: unknown) => (row ? (JSON.parse((row as { data: string }).data) as Actionable) : undefined)
 
 export function assertAction(a: Actionable, action: CardAction) {
@@ -134,7 +137,8 @@ export class Board implements IngestSink {
     return parseRow(
       this.db
         .prepare('SELECT data FROM actionables WHERE id = ? OR display_id = ? OR dedupe_key = ?')
-        .get(target, target.toUpperCase(), dedupeKey('api', target)),
+        .get(target, target.toUpperCase(), dedupeKey('api', target)) ??
+        this.db.prepare("SELECT data FROM actionables WHERE ? IN (SELECT value FROM json_each(data, '$.metadata.aliasIds'))").get(target),
     )
   }
 
@@ -165,6 +169,7 @@ export class Board implements IngestSink {
 
   save(a: Actionable, event?: EventInput) {
     a.updatedAt = this.iso()
+    if (event?.actor.kind === 'user') a.tags = without(a.tags, TAGS.snoozed)
     this.write(a)
     this.deps.push({ type: 'board.changed' })
     if (event) this.log(event, a)
@@ -249,7 +254,7 @@ export class Board implements IngestSink {
           instructions: signal.instructions,
           priority: signal.priority,
           tags: unique(needsRepository ? [...tags, TAGS.needsRepository] : tags),
-          metadata: signal.metadata ?? {},
+          metadata: { ...externalMetadata(signal.metadata), ...(needsRepository && signal.autoStart ? { autoStartOnRepository: true } : {}) },
         },
         received('created'),
       )
@@ -271,7 +276,8 @@ export class Board implements IngestSink {
         a.links = mergeLinks(a.links, signal.links ?? [])
         a.tags = unique([...a.tags, ...tags])
         a.triggers = unique([...a.triggers, signal.trigger])
-        a.metadata = { ...a.metadata, ...signal.metadata }
+        a.metadata = { ...a.metadata, ...externalMetadata(signal.metadata) }
+        if (signal.id && signal.id !== a.id) a.metadata.aliasIds = unique([...((a.metadata.aliasIds as string[] | undefined) ?? []), signal.id]).slice(-MAX_ALIASES)
         if (a.dismissedAt || a.column === 'done' || (a.snoozedUntil && a.column !== 'in_progress')) {
           this.reopenFields(a)
           delete a.dismissedAt
@@ -285,6 +291,19 @@ export class Board implements IngestSink {
 
   private autoStart(id: string) {
     void this.agents?.start(id, undefined, true).catch((err: Error) => this.log({ type: 'failed', actor: GANTRY, detail: err.message }, this.get(id)))
+  }
+
+  repositoryRegistered() {
+    const repos = this.deps.repositories()
+    for (const card of this.all()) {
+      if (!card.tags.includes(TAGS.needsRepository) || !findRepository(repos, card.repository)) continue
+      const { autoStartOnRepository, ...metadata } = card.metadata
+      this.update(card.id, (a) => {
+        a.tags = without(a.tags, TAGS.needsRepository)
+        a.metadata = metadata
+      })
+      if (autoStartOnRepository && !card.dismissedAt && card.column === 'todo') this.autoStart(card.id)
+    }
   }
 
   logIgnored(signal: IngestSignal, outcome: Extract<ReceivedOutcome, `ignored:${string}`>, reason: string) {
@@ -388,6 +407,7 @@ export class Board implements IngestSink {
     if (column === 'done' && from !== 'done') this.markDoneFields(a)
     if (from === 'done' && column !== 'done') this.reopenFields(a)
     a.column = column
+    a.tags = without(a.tags, TAGS.snoozed)
     const siblings = this.all()
       .filter((c) => c.column === column && c.id !== id && !c.archivedAt && !c.dismissedAt)
       .sort((x, y) => x.position - y.position)
@@ -432,7 +452,17 @@ export class Board implements IngestSink {
     const now = this.now().getTime()
     const s = this.deps.settings()
     for (const a of this.all()) {
-      if (a.snoozedUntil && Date.parse(a.snoozedUntil) <= now) this.update(a.id, (c) => delete c.snoozedUntil, { type: 'unsnoozed', actor: GANTRY })
+      if (a.snoozedUntil && Date.parse(a.snoozedUntil) <= now)
+        this.update(
+          a.id,
+          (c) => {
+            delete c.snoozedUntil
+            if (c.column === 'in_progress' || c.column === 'done') return
+            c.tags = unique([...c.tags, TAGS.snoozed])
+            this.reopenFields(c)
+          },
+          { type: 'unsnoozed', actor: GANTRY },
+        )
       else if (a.column === 'done' && a.doneAt && !a.archivedAt && Date.parse(a.doneAt) <= now - s.archiveDoneAfterDays * DAY_MS)
         this.update(a.id, (c) => (c.archivedAt = this.iso()))
     }

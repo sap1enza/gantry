@@ -1,10 +1,12 @@
+import { TAGS } from '@gantry/shared'
 import { describe, expect, it, vi } from 'vitest'
 import { createApi, toCsv, type Platform } from './api'
+import type { Ingestion } from './contracts'
 import { createSecretStore, jsonTable } from './db/stores'
 import { flush, setup, signal } from './domain/testing'
 import { AccountService } from './system/account'
 
-function api(s = setup(), workerFetch?: typeof fetch) {
+function api(s = setup(), workerFetch?: typeof fetch, ingestion?: Partial<Ingestion>) {
   const secrets = createSecretStore(s.db, { encrypt: (v) => Buffer.from(v), decrypt: (b) => Buffer.from(b).toString() })
   const account = new AccountService({ meta: jsonTable(s.db, 'meta'), secrets, workerUrl: () => 'http://worker.test', fetch: workerFetch })
   const order: string[] = []
@@ -22,6 +24,7 @@ function api(s = setup(), workerFetch?: typeof fetch) {
     settings: s.settings,
     repos: s.repos,
     secrets,
+    ingestion: ingestion as Ingestion | undefined,
     providers: new Map([[s.provider.id, s.provider]]),
     exec: async (_, args) => {
       if (args.includes('--show-toplevel')) return { code: 0, output: '/code/web\n' }
@@ -89,6 +92,49 @@ describe('api', () => {
     await gantry.system.deleteAllData()
     expect(order).toEqual(['stop', `removed git -C /code/api worktree remove ${path}`, 'worker /v1/me', 'wipe', 'relaunch'])
     expect(secrets.get('device')).toBeUndefined()
+  })
+})
+
+describe('api follow-ups', () => {
+  const deviceFetch = () =>
+    vi.fn(async (url: URL) =>
+      url.pathname === '/v1/devices' ? Response.json({ deviceId: 'd1', deviceSecret: 'x', userId: 'u1' }) : Response.json({ id: 'a1', url: 'gantry://actionable/a1' }),
+    )
+
+  it('sends the test actionable through the device route without minting a token', async () => {
+    const workerFetch = deviceFetch()
+    const syncNow = vi.fn(async () => undefined)
+    const { gantry, account } = api(setup(), workerFetch as unknown as typeof fetch, { syncNow })
+    await account.setName('Lucas')
+    await gantry.connections.sendTestActionable()
+    const paths = workerFetch.mock.calls.map(([url]) => url.pathname)
+    expect(paths).toContain('/v1/test-actionable')
+    expect(paths).not.toContain('/v1/tokens')
+    expect(syncNow).toHaveBeenCalled()
+  })
+
+  it('disconnect logs one connection event and tags cards from that source', async () => {
+    const s = setup()
+    const { gantry } = api(s, undefined, { disconnect: async (p) => void s.board.logConnection(p, 'disconnected') })
+    const { actionableId } = s.board.ingest(signal({ source: { kind: 'email', name: 'Gmail' }, trigger: 'email.new' }))
+    await gantry.connections.disconnect('google')
+    expect(s.board.events({ types: ['connection'] }).events).toHaveLength(1)
+    expect(s.board.must(actionableId!).tags).toContain(TAGS.sourceDisconnected)
+  })
+
+  it('registering a repository clears Needs repository and auto-starts waiting cards', async () => {
+    const s = setup()
+    const { gantry } = api(s)
+    const apiCard = (id: string, autoStart: boolean) =>
+      s.board.ingest(signal({ id, trigger: 'api.custom', source: { kind: 'api', name: 'HB' }, externalKey: `HB:${id}`, links: [], repository: 'acme/web', autoStart }))
+    apiCard('auto', true)
+    apiCard('manual', false)
+    await gantry.repos.add()
+    await flush()
+    expect(s.board.must('auto')).toMatchObject({ column: 'in_progress', agentState: 'running' })
+    expect(s.board.must('manual').column).toBe('todo')
+    expect(s.board.must('manual').tags).not.toContain(TAGS.needsRepository)
+    expect(s.board.must('auto').metadata).not.toHaveProperty('autoStartOnRepository')
   })
 })
 
