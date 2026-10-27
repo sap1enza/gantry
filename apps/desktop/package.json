@@ -13,7 +13,8 @@
     "package": "electron-vite build && electron-builder --mac --dir"
   },
   "dependencies": {
-    "@gantry/shared": "workspace:*"
+    "@gantry/shared": "workspace:*",
+    "lucide-react": "^1.61.0"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
