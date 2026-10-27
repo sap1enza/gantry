@@ -64,7 +64,7 @@ export type Ctx = ReturnType<typeof createCtx>
 export function createCtx(deps: IngestionDeps) {
   const listeners = new Set<() => void>()
   const blocked = new Map<OAuthProvider, number>()
-  const refreshing = new Map<OAuthProvider, Promise<GrantTokenResponse>>()
+  const refreshing = new Map<string, Promise<GrantTokenResponse>>()
   const now = () => (deps.now?.() ?? new Date()).getTime()
   const settings = (): Settings => deps.getSettings()
 
@@ -91,8 +91,9 @@ export function createCtx(deps: IngestionDeps) {
   }
 
   function refresh(p: OAuthProvider, force = false): Promise<GrantTokenResponse> {
-    const inFlight = refreshing.get(p) ?? refreshOnce(p, force).finally(() => refreshing.delete(p))
-    refreshing.set(p, inFlight)
+    const key = `${p}:${force}`
+    const inFlight = refreshing.get(key) ?? refreshOnce(p, force).finally(() => refreshing.delete(key))
+    refreshing.set(key, inFlight)
     return inFlight
   }
 

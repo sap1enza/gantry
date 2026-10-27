@@ -106,6 +106,14 @@ describe('tokens and rate limits', () => {
     expect(worker.refreshGrant).toHaveBeenCalledTimes(1)
   })
 
+  it('does not let a forced refresh reuse a normal one in flight', async () => {
+    const worker = workerWith([])
+    worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'lucas' }, 'new'))
+    const ctx = createCtx(fakeDeps(worker))
+    await Promise.all([ctx.refresh('github'), ctx.refresh('github', true)])
+    expect(worker.refreshGrant.mock.calls).toEqual([['github', { force: false }], ['github', { force: true }]])
+  })
+
   it('refreshes before expiry', async () => {
     const worker = workerWith([])
     worker.refreshGrant.mockResolvedValue(grantFor('google', { id: 'g', login: 'me' }, 'new'))

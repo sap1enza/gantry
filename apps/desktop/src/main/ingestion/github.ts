@@ -277,10 +277,12 @@ interface SearchPage {
 
 async function searchAll(ctx: Ctx, fields: string, q: string): Promise<Search> {
   const nodes: SearchNode[] = []
+  let firstCount: number | undefined
   for (let after: string | null = null; ; ) {
     const { data }: { data: { search: SearchPage } } = await gh(ctx, '/graphql', { method: 'POST', body: JSON.stringify({ query: SEARCH(fields), variables: { q, after } }) })
     nodes.push(...data.search.nodes)
-    if (!data.search.pageInfo.hasNextPage) return { nodes, complete: nodes.length >= data.search.issueCount }
+    firstCount ??= data.search.issueCount
+    if (!data.search.pageInfo.hasNextPage) return { nodes, complete: nodes.length >= data.search.issueCount && firstCount === data.search.issueCount }
     after = data.search.pageInfo.endCursor
   }
 }
@@ -353,20 +355,18 @@ export async function reconcileGithub(ctx: Ctx) {
   const settings = ctx.settings()
   const prev = active(ctx)
   const assignedOnly = settings.github.issuesScope === 'assigned'
-  const current = currentFromSearch(
-    ctx,
-    {
-      authored: await searchAll(ctx, AUTHORED_FIELDS, `is:pr is:open archived:false author:${me}`),
-      review: await searchAll(ctx, `...on PullRequest { ${NODE} }`, `is:pr is:open archived:false user-review-requested:${me}`),
-      issues: assignedOnly ? await searchAll(ctx, `...on Issue { ${NODE} }`, `is:issue is:open archived:false assignee:${me}`) : undefined,
-    },
-    prev,
-  )
+  const [authored, review, issues] = await Promise.all([
+    searchAll(ctx, AUTHORED_FIELDS, `is:pr is:open archived:false author:${me}`),
+    searchAll(ctx, `...on PullRequest { ${NODE} }`, `is:pr is:open archived:false user-review-requested:${me}`),
+    assignedOnly ? searchAll(ctx, `...on Issue { ${NODE} }`, `is:issue is:open archived:false assignee:${me}`) : undefined,
+  ])
+  const current = currentFromSearch(ctx, { authored, review, issues }, prev)
+  if (assignedOnly) ctx.deps.kv.delete('github.issuesSince')
   let repos: Promise<string[]> | undefined
   // shortcut: lists every accessible repo per reconcile when none are selected, cache the list if users hit rate limits
   const repoNames = () => (repos ??= settings.github.repositories.length ? Promise.resolve(settings.github.repositories) : githubRepositories(ctx).then((rs) => rs.map((r) => r.fullName)))
   if (ctx.triggerOn('github.dependabot')) current['github.dependabot'] = await unlessFailed(async () => openAlerts(ctx, settings, await repoNames()))
-  if (!assignedOnly && ctx.triggerOn('github.issue')) current['github.issue'] = await unlessFailed(async () => openIssues(ctx, await repoNames()))
+  if (!assignedOnly && ctx.triggerOn('github.issue')) current['github.issue'] = await unlessFailed(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? []))
   await applyReconciliation(ctx, current, prev)
   await reconcileMentions(ctx, me)
 }
@@ -384,11 +384,16 @@ async function openAlerts(ctx: Ctx, settings: Settings, repos: string[]): Promis
   return { signals, complete: true }
 }
 
-async function openIssues(ctx: Ctx, repos: string[]): Promise<Tracked> {
+async function openIssues(ctx: Ctx, repos: string[], tracked: string[]): Promise<Tracked> {
+  const since = ctx.deps.kv.get<string>('github.issuesSince') ?? ctx.iso()
+  ctx.deps.kv.set('github.issuesSince', since)
   const signals = new Map<string, IngestSignal>()
   for (const fullName of repos) {
-    const issues = await ghAll<Issue>(ctx, `/repos/${fullName}/issues?state=open&per_page=100`)
-    for (const i of issues) if (!i.pull_request) signals.set(i.html_url, signal(ctx, 'github.issue', i, fullName, { actor: i.user?.login }))
+    const issues = await ghAll<Issue & { created_at: string }>(ctx, `/repos/${fullName}/issues?state=open&per_page=100`).catch((e) => {
+      if (e instanceof HttpError && [403, 404, 410].includes(e.status)) return []
+      throw e
+    })
+    for (const i of issues) if (!i.pull_request && (i.created_at >= since || tracked.includes(i.html_url))) signals.set(i.html_url, signal(ctx, 'github.issue', i, fullName, { actor: i.user?.login }))
   }
   return { signals, complete: true }
 }
@@ -397,7 +402,12 @@ export async function mentionResolution(ctx: Ctx, me: string, htmlUrl: string) {
   const target = apiUrlFor(htmlUrl)
   if (!target || target.kind === 'security/dependabot') return undefined
   const base = `/repos/${target.repo}`
-  const thread = await gh<{ state: string }>(ctx, `${base}/issues/${target.number}`)
+  const thread = await gh<{ state: string; pull_request?: { merged_at: string | null } }>(ctx, `${base}/issues/${target.number}`).catch((e) => {
+    if (e instanceof HttpError && [404, 410].includes(e.status)) return undefined
+    throw e
+  })
+  if (!thread) return 'No longer accessible'
+  if (thread.pull_request?.merged_at) return 'Pull request merged'
   if (thread.state === 'closed') return target.kind === 'pull' ? 'Pull request closed' : 'Issue closed'
   const paths = [`${base}/issues/${target.number}/comments?per_page=100`]
   if (target.kind === 'pull') paths.push(`${base}/pulls/${target.number}/comments?per_page=100`, `${base}/pulls/${target.number}/reviews?per_page=100`)

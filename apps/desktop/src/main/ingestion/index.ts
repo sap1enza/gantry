@@ -10,7 +10,7 @@ const MAX_ITEM_ATTEMPTS = 5
 const MAX_CONTEXT = 8_000
 const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
-  github: ['github.active'],
+  github: ['github.active', 'github.issuesSince'],
   slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt'],
   google: ['gmail.historyId'],
 }

@@ -232,6 +232,15 @@ describe('reconcileGithub', () => {
     expect(deps.sink.resolve.mock.calls.map(([r]) => r.externalKey)).toEqual([pr(9).url])
   })
 
+  it('treats a search whose count changed while paging as truncated', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.active', { 'github.review_requested': ['https://github.com/acme/app/pull/9'] })
+    const pr = (n: number) => ({ url: `https://github.com/acme/app/pull/${n}`, number: n, title: `PR ${n}`, repository: { nameWithOwner: 'acme/app' } })
+    routeFetch([['/graphql', (init) => res(JSON.parse(String(init!.body)).variables.after ? searchPage([pr(2)], 2) : searchPage([pr(1)], 3, 'p2'))]])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
+  })
+
   it('does not resolve when search hits the result cap', async () => {
     const { ctx, deps } = setup()
     deps.kv.set('github.active', { 'github.review_requested': ['https://github.com/acme/app/pull/9'] })
@@ -250,7 +259,12 @@ describe('reconcileGithub', () => {
       ['/graphql', emptySearch],
       [
         '/repos/acme/app/issues?',
-        () => res([{ html_url: 'https://github.com/acme/app/issues/2', number: 2, title: 'Open', user: { login: 'ana' } }, { html_url: 'https://github.com/acme/app/pull/3', number: 3, title: 'PR', pull_request: {} }]),
+        () =>
+          res([
+            { html_url: 'https://github.com/acme/app/issues/2', number: 2, title: 'New', user: { login: 'ana' }, created_at: '2026-10-27T12:00:01Z' },
+            { html_url: 'https://github.com/acme/app/issues/4', number: 4, title: 'Old', created_at: '2020-01-01T00:00:00Z' },
+            { html_url: 'https://github.com/acme/app/pull/3', number: 3, title: 'PR', pull_request: {}, created_at: '2026-10-27T12:00:01Z' },
+          ]),
       ],
     ])
     await reconcileGithub(ctx)
@@ -258,6 +272,22 @@ describe('reconcileGithub', () => {
     expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ externalKey: 'https://github.com/acme/app/issues/2', actor: 'ana' })
     expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.issue', externalKey: 'https://github.com/acme/app/issues/1', reason: 'Issue closed' })
     expect(fetch.mock.calls.filter(([, init]) => String(init?.body ?? '').includes('assignee:'))).toHaveLength(0)
+    expect(deps.kv.get('github.issuesSince')).toBe('2026-10-27T12:00:00.000Z')
+  })
+
+  it("skips repositories with issues disabled in scope 'all'", async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = ['acme/off', 'acme/app']
+    deps.settings.github.issuesScope = 'all'
+    deps.settings.triggers = { ...deps.settings.triggers, 'github.issue': true, 'github.dependabot': false }
+    deps.kv.set('github.active', { 'github.issue': ['https://github.com/acme/app/issues/1'] })
+    routeFetch([
+      ['/graphql', emptySearch],
+      ['/repos/acme/off/issues?', () => res({}, 410)],
+      ['/repos/acme/app/issues?', () => res([])],
+    ])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve).toHaveBeenCalledWith(expect.objectContaining({ externalKey: 'https://github.com/acme/app/issues/1' }))
   })
 
   it('resolves active mentions from thread state', async () => {
@@ -288,6 +318,16 @@ describe('mentionResolution', () => {
       ['/issues/3/comments', () => res(items)],
       ['/issues/3', () => res({ state: 'open' })],
     ])
+
+  it('resolves merged pull requests and threads that are gone', async () => {
+    const { ctx } = setup()
+    routeFetch([
+      ['/issues/7', () => res({ state: 'closed', pull_request: { merged_at: '2026-10-27T10:00:00Z' } })],
+      ['/issues/3', () => res({}, 404)],
+    ])
+    expect(await mentionResolution(ctx, 'lucas', 'https://github.com/acme/app/pull/7')).toBe('Pull request merged')
+    expect(await mentionResolution(ctx, 'lucas', thread)).toBe('No longer accessible')
+  })
 
   it('ignores my replies that came before the latest mention', async () => {
     const { ctx } = setup()
