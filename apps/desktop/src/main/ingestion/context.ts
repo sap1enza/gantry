@@ -48,7 +48,7 @@ export function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Prom
 export function isTransient(e: unknown) {
   const status = (e as { status?: unknown })?.status
   if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
-  return e instanceof TypeError || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
+  return (e instanceof TypeError && e.message === 'fetch failed') || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
 }
 
 export function skipUnlessFatal(e: unknown) {

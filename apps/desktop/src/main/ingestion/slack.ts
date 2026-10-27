@@ -105,8 +105,7 @@ function messageSignal(ctx: Ctx, m: SlackMessage & { channel: string }, trigger:
 export async function slackEvent(ctx: Ctx, payload: { event?: SlackMessage; event_id?: string } & SlackMessage) {
   const seen = ctx.deps.kv.get<Record<string, number>>('slack.seenEvents') ?? {}
   if (payload.event_id && seen[payload.event_id]) return
-  await handleMessage(ctx, payload.event ?? payload)
-  if (!payload.event_id) return
+  if (!(await handleMessage(ctx, payload.event ?? payload)) || !payload.event_id) return
   const fresh = Object.entries(seen).filter(([, at]) => ctx.now() - at < SEEN_EVENT_TTL_MS)
   ctx.deps.kv.set('slack.seenEvents', Object.fromEntries([...fresh, [payload.event_id, ctx.now()]]))
 }
@@ -118,10 +117,12 @@ async function handleMessage(ctx: Ctx, m: SlackMessage) {
   const filtered = await channelFilter(ctx, m.channel, m.channel_type)
   const s = messageSignal(ctx, { ...m, channel: m.channel }, 'slack.mention')
   await ctx.emit(s, { filtered })
-  if (filtered || !ctx.triggerOn('slack.unreplied')) return
-  const dueAt = ctx.now() + ctx.settings().slack.unrepliedAfterMinutes * 60_000
-  const pending = ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []
-  ctx.deps.kv.set('slack.pending', [...pending, { channel: m.channel, ts: m.ts, threadTs: m.thread_ts, dueAt, signal: { ...s, trigger: 'slack.unreplied' } }])
+  if (!filtered && ctx.triggerOn('slack.unreplied')) {
+    const dueAt = ctx.now() + ctx.settings().slack.unrepliedAfterMinutes * 60_000
+    const pending = ctx.deps.kv.get<PendingMention[]>('slack.pending') ?? []
+    ctx.deps.kv.set('slack.pending', [...pending, { channel: m.channel, ts: m.ts, threadTs: m.thread_ts, dueAt, signal: { ...s, trigger: 'slack.unreplied' } }])
+  }
+  return true
 }
 
 async function conversation(ctx: Ctx, channel: string, ts: string, threadTs?: string) {

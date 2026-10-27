@@ -218,6 +218,29 @@ describe('serial', () => {
 })
 
 describe('createIngestion', () => {
+  it('waits for a running job before forgetting a disconnected provider', async () => {
+    vi.useFakeTimers()
+    const worker = { ...workerWith([]), revokeGrant: vi.fn(async () => undefined) }
+    const deps = fakeDeps(worker)
+    deps.secrets.set('grant.google', JSON.stringify(grantFor('google', { id: 'g', login: 'me' })))
+    let respond!: (r: Response) => void
+    routeFetch([
+      ['/profile', () => res({ historyId: '9' })],
+      ['/messages?q=', () => new Promise<Response>((r) => (respond = r)) as never],
+    ])
+    const ingestion = createIngestion(deps)
+    ingestion.start()
+    await vi.advanceTimersByTimeAsync(0)
+    const disconnected = ingestion.disconnect('google')
+    await vi.advanceTimersByTimeAsync(0)
+    respond(res({}))
+    await disconnected
+    await vi.advanceTimersByTimeAsync(0)
+    ingestion.stop()
+    vi.useRealTimers()
+    expect(deps.kv.get('gmail.historyId')).toBeUndefined()
+  })
+
   it('keeps polling the inbox while a reconcile job hangs', async () => {
     vi.useFakeTimers()
     const worker = workerWith([])

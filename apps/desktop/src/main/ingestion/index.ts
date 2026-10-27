@@ -40,7 +40,9 @@ function report(e: unknown) {
   console.error('[ingestion]', e)
 }
 
-async function handleInboxItem(ctx: Ctx, item: InboxItem) {
+type Exclusive = (run: () => Promise<void>) => Promise<void>
+
+async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) {
   const p = item.payload
   switch (p.kind) {
     case 'actionable.create': {
@@ -74,7 +76,7 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem) {
         await ctx.refresh(p.provider)
         return
       }
-      if (p.status === 'disconnected') return forget(ctx, p.provider)
+      if (p.status === 'disconnected') return exclusive(async () => forget(ctx, p.provider))
       return ctx.setConnection(p.provider, { status: p.status })
     case 'github.webhook':
       return githubWebhook(ctx, p.event, p.payload as Parameters<typeof githubWebhook>[2])
@@ -98,14 +100,14 @@ function contextFor(ctx: Ctx, a: Actionable) {
   return undefined
 }
 
-export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
+export async function pollInbox(ctx: Ctx, failures: Map<string, number>, exclusive: Exclusive = (run) => run()) {
   const worker = ctx.deps.worker()
   if (!worker) return
   const { items } = await withTimeout(worker.inbox())
   const handled: string[] = []
   for (const item of items) {
     try {
-      await handleInboxItem(ctx, item)
+      await handleInboxItem(ctx, item, exclusive)
       failures.delete(item.id)
     } catch (e) {
       if (e instanceof ThrottledError) continue
@@ -129,7 +131,7 @@ export function serial() {
   return (run: () => Promise<void>, force = false) => {
     if (waiting && !force) return tail
     waiting = true
-    tail = tail.then(() => {
+    tail = tail.catch(() => {}).then(() => {
       waiting = false
       return run()
     })
@@ -159,7 +161,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
   }
 
   async function schedule(force: boolean) {
-    await Promise.all([inbox(() => pollInbox(ctx, failures).catch(report)), jobs(() => runJobs(force), force)])
+    await Promise.all([inbox(() => pollInbox(ctx, failures, (run) => jobs(run, true)).catch(report)), jobs(() => runJobs(force), force)])
   }
 
   return {
@@ -187,7 +189,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     },
     async disconnect(provider) {
       await deps.worker()?.revokeGrant(provider).catch(report)
-      forget(ctx, provider)
+      await jobs(async () => forget(ctx, provider), true)
     },
     manageAccessUrl: (provider) => MANAGE_ACCESS[provider],
     githubRepositories: () => githubRepositories(ctx),

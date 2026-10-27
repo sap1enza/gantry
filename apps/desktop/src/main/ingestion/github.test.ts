@@ -140,7 +140,19 @@ describe('reconciliation', () => {
     })
     const current = currentFromSearch(ctx, { authored: { complete: true, nodes: [] }, review: { complete: true, nodes: [node(5)] } }, {})
     await applyReconciliation(ctx, current, {})
-    expect(deps.kv.get('github.active')).toMatchObject({ 'github.review_requested': [node(5).url, webhookKey], 'github.mention': [webhookKey] })
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.review_requested': [webhookKey, node(5).url], 'github.mention': [webhookKey] })
+  })
+
+  it('does not restore a key a webhook resolved while an incomplete reconciliation was running', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.active', { 'github.review_requested': [node(9).url] })
+    deps.sink.ingest.mockImplementation(() => {
+      deps.kv.set('github.active', { 'github.review_requested': [] })
+      return { outcome: 'created' }
+    })
+    const current = currentFromSearch(ctx, { authored: { complete: true, nodes: [] }, review: { complete: false, nodes: [node(5)] } }, {})
+    await applyReconciliation(ctx, current, { 'github.review_requested': [node(9).url] })
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.review_requested': [node(5).url] })
   })
 
   it('maps search state to current entities, keeping pending ones that were active', () => {
@@ -203,7 +215,7 @@ describe('reconcileGithub', () => {
     expect(queries).toContain('mentions:lucas is:open archived:false updated:>=2026-10-27T11:50:00.000Z')
     expect(deps.sink.ingest.mock.calls.map(([x]) => [x.trigger, x.externalKey])).toEqual([['github.mention', issue.url]])
     expect(deps.kv.get('github.active')).toMatchObject({ 'github.mention': [issue.url] })
-    expect(deps.kv.get('github.mentionsSince')).toBe(NOW.toISOString())
+    expect(deps.kv.get('github.mentionsSince')).toBe('2026-10-27T12:00:00Z')
   })
 
   const alertUrl = (n: number) => `https://github.com/acme/app/security/dependabot/${n}`
