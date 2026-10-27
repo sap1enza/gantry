@@ -128,7 +128,7 @@ Actionable {
 - Any → Dismissed (archived; kills agent if running).
 - Any → Snoozed (hidden; not allowed while agent running).
 - Manual move to custom columns: allowed from To-do, Review, Done, custom; from In Progress only when paused/stopped. Agents never run in a custom column.
-- Auto-resolve: external state resolves (PR merged, CI green, mention replied, email replied) → To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only.
+- Auto-resolve (GitHub only, per table in 8.1): To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only. Slack, Email, API, and manual cards never auto-resolve; they move only by user action.
 
 **Card buttons (icon + label)**
 
@@ -194,7 +194,7 @@ Scope: selected repositories.
 | PRs with failing CI | PRs authored by me, check-suite failed | checks green or PR closed |
 | PRs with merge conflicts | PRs authored by me, mergeable=false | mergeable or closed |
 | PRs with changes requested | PRs authored by me, review state CHANGES_REQUESTED | approved/dismissed or closed |
-| Review requests | review requested of me or my team | review submitted or PR closed |
+| Review requests | review requested of me specifically (team requests ignored) | review submitted or PR closed |
 | Mentions | @me in issue/PR comments | user replied in thread |
 | Dependabot alerts | alerts in selected repos ≥ severity threshold (default high) | alert fixed/dismissed |
 | New issues | assigned to me, or any new issue in selected repos (toggle) | closed |
@@ -208,10 +208,10 @@ Settings: channel allow/deny list, "check unreplied after N minutes" (default 30
 | Unreplied mentions (LLM) | mentions re-checked after N min; LLM decides a reply is still owed |
 | Conversations needing follow-up (LLM) | threads/DMs where I posted in last 7 days; LLM finds commitments with a remaining next step |
 
-Cards include the original message text so the user can verify before dispatching. Resolves when I reply in the thread.
+Cards include the original message text so the user can verify before dispatching. No automatic resolution: cards move only by manual action (Done, Dismiss, drag).
 
 ### 8.3 Email (Gmail)
-Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories (Promotions/Social/Updates/Forums), from-domain allow/deny, label filter. Optional **LLM "needs action" gate**. Polling only (no Pub/Sub). Resolves when I reply to the thread. Expired OAuth → "Reconnect required" state; existing cards kept; connection event logged.
+Trigger: New emails. Filters: Inbox only, Unread only, exclude Gmail categories (Promotions/Social/Updates/Forums), from-domain allow/deny, label filter. Optional **LLM "needs action" gate**. Polling only (no Pub/Sub). No automatic resolution: cards move only by manual action (Done, Dismiss, drag). Expired OAuth → "Reconnect required" state; existing cards kept; connection event logged.
 
 ### 8.4 API & custom sources
 `POST https://<worker>/v1/actionables` with `Authorization: Bearer <token>`. Tokens created in Connections (`Create API token`), stored in Worker, shown once.
@@ -304,6 +304,4 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 ## 15. Open items
 
-- Slack "my team" review-request matching needs GitHub team membership lookup (cache daily).
-- Gmail "replied" detection relies on thread history; may lag reconciliation interval.
 - Deep link `gantry://actionable/<id>` registration in Electron.
