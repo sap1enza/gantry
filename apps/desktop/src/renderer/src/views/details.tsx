@@ -39,17 +39,16 @@ const describeAgentEvent = (e: AgentEvent): string | undefined => {
 
 export function DetailsPanel({ id }: { id: string }) {
   const app = useApp()
-  const fromSnapshot = app.snapshot?.actionables.find((a) => a.id === id)
   const [fetched, setFetched] = useState<Actionable>()
-  const card = fetched?.id === id ? fetched : fromSnapshot
+  const card = fetched?.id === id ? fetched : undefined
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [live, setLive] = useState<{ at: string; text: string }[]>([])
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState('')
   const [transcript, setTranscript] = useState<TranscriptEntry[]>()
 
-  const version = fromSnapshot?.updatedAt
-  const fetchCard = useCallback(() => void api.board.get(id).then(setFetched), [id])
+  const version = app.snapshot?.actionables.find((a) => a.id === id)?.updatedAt
+  const fetchCard = useCallback(() => void api.board.get(id).then((c) => c && setFetched((prev) => (prev?.id === c.id && prev.updatedAt > c.updatedAt ? prev : c))), [id])
   useEffect(() => {
     setLive([])
     setAnswer('')

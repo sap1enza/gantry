@@ -225,7 +225,7 @@ export function Markdown({ source, onLink }: { source: string; onLink: (url: str
 export const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 export const clockSeconds = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 export const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?'
-const relative = new Intl.RelativeTimeFormat(undefined, { style: 'short' })
+const relative = new Intl.RelativeTimeFormat('en')
 export function ago(iso?: string) {
   if (!iso) return 'never'
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)

@@ -1,6 +1,6 @@
 import { EVENT_TYPES, PROVIDER_SOURCE, SOURCE_KINDS, unique, type OAuthProvider, type SourceKind, type ActivityEvent, type ActivityQuery, type EventType } from '@gantry/shared'
 import { Calendar, ChevronDown, Download, Search, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
 import { clockSeconds, Popover, SOURCE_LABELS, SourceIcon, Tag, toggle, usePopover } from '../ui'
@@ -94,6 +94,8 @@ export function ActivityView() {
     () => ({ types, sources, actionableId: app.activityCard, text: text.trim() || undefined, since: sinceFor(RANGES.find((r) => r.id === range)!.days) }),
     [types, sources, app.activityCard, text, range],
   )
+  const loaded = useRef(0)
+  loaded.current = events.length
   const [page, setPage] = useState({ filters, limit: PAGE })
   const limit = page.filters === filters ? page.limit : PAGE
   const query = useMemo(() => ({ ...filters, limit }), [filters, limit])
@@ -114,7 +116,8 @@ export function ActivityView() {
   usePush('activity.appended', ({ event }) => {
     setTotalToday((n) => n + 1)
     if (!matches(event, query)) return
-    if (events.length >= limit) setMore(true)
+    if (loaded.current >= limit) setMore(true)
+    else loaded.current++
     setEvents((list) => [event, ...list].slice(0, limit))
   })
 
