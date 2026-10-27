@@ -1,10 +1,9 @@
-import { unique, type IngestSignal, type Settings, type TriggerId } from '@gantry/shared'
+import { GITHUB_FAILED_CONCLUSIONS, unique, type IngestSignal, type Settings, type TriggerId } from '@gantry/shared'
 import { HttpError, isFatal, report, type Ctx, type EmitOptions } from './context'
 
 const API = 'https://api.github.com'
 const SOURCE = { kind: 'github', name: 'GitHub' } as const
 const SEVERITY = ['low', 'medium', 'high', 'critical']
-const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
 const CONCURRENCY = 4
 const PR_TRIGGERS: TriggerId[] = ['github.ci_failed', 'github.merge_conflict', 'github.changes_requested', 'github.review_requested', 'github.mention']
 
@@ -157,7 +156,7 @@ export async function githubWebhook(ctx: Ctx, event: string, p: WebhookPayload) 
     case 'check_suite':
     case 'check_run': {
       const unit = p[event]
-      if (p.action !== 'completed' || !unit || !FAILED.has(unit.conclusion ?? '')) return
+      if (p.action !== 'completed' || !unit || !GITHUB_FAILED_CONCLUSIONS.includes(unit.conclusion ?? '')) return
       const name = p.check_run?.name ?? p.check_suite?.app?.name ?? 'Checks'
       for (const ref of unit.pull_requests ?? []) {
         const pr = await gh<PullRequest>(ctx, ref.url)
@@ -485,7 +484,7 @@ export async function githubContext(ctx: Ctx, htmlUrl: string) {
   if (target.kind === 'pull') {
     const pr = await gh<PullRequest & { body?: string; additions: number; deletions: number; changed_files: number; head: { sha: string } }>(ctx, target.url)
     const runs = await ghAll(ctx, `/repos/${target.repo}/commits/${pr.head.sha}/check-runs?per_page=100`, (b: { check_runs: { name: string; conclusion: string | null }[] }) => b.check_runs)
-    const failing = runs.filter((r) => FAILED.has(r.conclusion ?? '')).map((r) => r.name)
+    const failing = runs.filter((r) => GITHUB_FAILED_CONCLUSIONS.includes(r.conclusion ?? '')).map((r) => r.name)
     return [
       `PR: ${pr.title}`,
       `Diff: +${pr.additions} −${pr.deletions} across ${pr.changed_files} files`,

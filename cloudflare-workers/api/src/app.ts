@@ -1,6 +1,7 @@
 import {
   createActionableSchema,
   DEEP_LINKS,
+  GITHUB_FAILED_CONCLUSIONS,
   patchActionableSchema,
   type ApiTokenInfo,
   type AuthCompletion,
@@ -62,7 +63,6 @@ const INBOX_PAGE_SIZE = 100
 const DEVICE_REGISTRATIONS_PER_HOUR = 10
 const HOUR_MS = 60 * 60 * 1000
 const ROUTING_REFRESH_GRANTS = 25
-const GITHUB_FAILED_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
 const GITHUB_HANDLED_ACTIONS: Record<string, string[]> = {
   check_suite: ['completed'],
   check_run: ['completed'],
@@ -85,7 +85,7 @@ type GithubPayload = {
 const desktopHandles = (event: string, p: GithubPayload) => {
   if (!GITHUB_HANDLED_ACTIONS[event]?.includes(p.action ?? '')) return false
   if (event !== 'check_suite' && event !== 'check_run') return true
-  return GITHUB_FAILED_CONCLUSIONS.has(p[event]?.conclusion ?? '') && Boolean(p[event]?.pull_requests?.length)
+  return GITHUB_FAILED_CONCLUSIONS.includes(p[event]?.conclusion ?? '') && Boolean(p[event]?.pull_requests?.length)
 }
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(100) })

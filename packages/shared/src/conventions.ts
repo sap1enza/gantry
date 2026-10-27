@@ -18,3 +18,5 @@ export const DEEP_LINKS = {
 } as const
 
 export const PROVIDER_SOURCE: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }
+
+export const GITHUB_FAILED_CONCLUSIONS: readonly string[] = ['failure', 'timed_out', 'startup_failure', 'action_required']
