@@ -5,6 +5,7 @@ import { useApp } from '../app'
 import { api } from '../bridge'
 import { SNOOZE_PRESETS, snoozeUntil } from '../lib/snooze'
 import { Github, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, SourceIcon, Tag } from '../ui'
+import { FinishInBrowser, useBrowserAuth } from './connections'
 import { stateLabel } from './details'
 
 export function SearchPalette() {
@@ -262,10 +263,9 @@ export function NameModal() {
   const [email, setEmail] = useState('')
   const [askEmail, setAskEmail] = useState(false)
   const signedIn = app.account?.signedIn
+  const auth = useBrowserAuth()
   const signIn = async (method: 'github' | 'email') => {
-    await app.run(api.account.signIn(method, method === 'email' ? email : undefined))
-    await app.reloadAccount()
-    if (method === 'email') app.toast(`Magic link sent to ${email}`)
+    if ((await auth.start(api.account.signIn(method, method === 'email' ? email : undefined))) && method === 'email') app.toast(`Magic link sent to ${email}`)
   }
   const save = async () => {
     await app.run(api.account.setName(name.trim()))
@@ -308,6 +308,7 @@ export function NameModal() {
               )}
             </div>
           )}
+          {auth.pending && <FinishInBrowser onClose={auth.clear} />}
         </div>
         <div className="modal-foot">
           <button className="btn primary" disabled={!name.trim()} onClick={save}>

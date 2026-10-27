@@ -19,12 +19,7 @@ const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 export function useBrowserAuth() {
   const app = useApp()
   const [pending, setPending] = useState(false)
-  useEffect(() => setPending(false), [app.account])
-  usePush('connections.changed', () => {
-    if (!pending) return
-    setPending(false)
-    void app.reloadAccount()
-  })
+  useEffect(() => setPending(false), [app.account, app.connections])
   return {
     pending,
     clear: () => setPending(false),
