@@ -26,8 +26,10 @@ const READ_ONLY_TOOLS = [
 ]
 const PATH_KEYS = ['file_path', 'notebook_path', 'path']
 const WEB_TOOLS = ['WebFetch', 'WebSearch']
-const GH_MUTATION =
-  /\bgh\s+(?!pr\s+create\b)(pr|issue|release|repo|gist|workflow|run|secret|variable|label)\s+(create|merge|close|reopen|edit|comment|review|delete|ready|upload|rerun|cancel|set|fork)\b|\bgh\s+api\b.*\s(-X|--method|-f|-F|--field|--raw-field|--input)/
+const GH = /(^|[^\w.-])gh([^\w.-]|$)/
+const GH_SAFE =
+  /^gh\s+((pr|issue|run|release|repo|workflow|label|gist|cache|ruleset|project)\s+(view|list|status|diff|checks)\b|search\s|status\b|pr\s+create\b(?!.*\s(-H|--head|-R|--repo)))/
+const GH_API_WRITE = /\s(-X|--method|-f|-F|--field|--raw-field|--input)/
 const READ_ONLY_COMMAND =
   /^(ls|cat|head|tail|wc|grep|rg|find|pwd|echo|which|file|stat|tree|du|diff|git (status|log|diff|show|blame|rev-parse|ls-files)|gh (pr|issue|run) (view|list|diff|checks))\b/
 const UNSAFE_SHELL = /[`$>]|<\(|-delete\b|-exec\b|-ok\b|-fprint|--pre\b|--output\b|\btree\b.*\s-o\b/
@@ -52,13 +54,20 @@ const allow: Decision = { behavior: 'allow' }
 const ask: Decision = { behavior: 'ask' }
 const deny = (message: string): Decision => ({ behavior: 'deny', message })
 
-export function isReadOnlyCommand(command: string): boolean {
-  if (UNSAFE_SHELL.test(command)) return false
-  return command
+const segments = (command: string) =>
+  command
     .split(/&&|\|\||[;|&\n]/)
     .map((segment) => segment.trim())
-    .every((segment) => !segment || READ_ONLY_COMMAND.test(segment))
+    .filter(Boolean)
+
+export function isReadOnlyCommand(command: string): boolean {
+  return !UNSAFE_SHELL.test(command) && segments(command).every((segment) => READ_ONLY_COMMAND.test(segment))
 }
+
+const isSafeGhSegment = (segment: string) =>
+  !GH.test(segment) || GH_SAFE.test(segment) || (/^gh\s+api\s/.test(segment) && !GH_API_WRITE.test(segment))
+
+const isSafeGhCommand = (command: string) => !GH.test(command) || (!UNSAFE_SHELL.test(command) && segments(command).every(isSafeGhSegment))
 
 export function isOutside(worktreePath: string, toolName: string, input: Record<string, unknown>): boolean {
   const keys = toolName === 'Glob' && /^[~/]/.test(String(input.pattern)) ? [...PATH_KEYS, 'pattern'] : PATH_KEYS
@@ -84,7 +93,7 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
     return isReadOnlyCommand(command) ? allow : deny('Read-only preset: only read-only shell commands are allowed.')
   }
   if (preset === 'edit_test') return PUBLISH.test(command) ? deny('Edit + test preset: publishing packages is not allowed.') : allow
-  return GH_MUTATION.test(command) || PUBLISH.test(command) ? ask : allow
+  return !isSafeGhCommand(command) || PUBLISH.test(command) ? ask : allow
 }
 
 export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard: Guard): SandboxSettings {

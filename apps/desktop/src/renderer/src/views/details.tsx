@@ -53,7 +53,12 @@ export function DetailsPanel({ id }: { id: string }) {
     setLive([])
     setAnswer('')
     setFeedback('')
-    void api.activity.list({ actionableId: id, limit: 6 }).then((log) => setEvents(log.events))
+    setEvents([])
+    let current = true
+    void api.activity.list({ actionableId: id, limit: 6 }).then((log) => current && setEvents(log.events))
+    return () => {
+      current = false
+    }
   }, [id])
   useEffect(fetchCard, [fetchCard, version])
   usePush('board.changed', () => !version && fetchCard())

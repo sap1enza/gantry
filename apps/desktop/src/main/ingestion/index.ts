@@ -12,7 +12,7 @@ const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
   slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt'],
-  google: ['gmail.historyId'],
+  google: ['gmail.historyId', 'gmail.polledAt'],
 }
 const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.', slack: 'slack.', google: 'gmail:' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
