@@ -1,4 +1,6 @@
 import {
+  errorMessage,
+  PROVIDER_SOURCE,
   SECRET_KEYS,
   TRIGGERS,
   WorkerError,
@@ -12,7 +14,6 @@ import {
   type Settings,
   type TriggerId,
 } from '@gantry/shared'
-import { PROVIDER_SOURCE } from '@gantry/shared'
 import type { IngestionDeps } from '../contracts'
 import { classify, LlmError } from './llm'
 
@@ -37,24 +38,28 @@ export class HttpError extends Error {
 export class NotConnectedError extends Error {}
 
 export const FETCH_TIMEOUT_MS = 20_000
-
-export function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new DOMException(`Timed out after ${ms} ms`, 'TimeoutError')), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
-}
+const MAX_ATTEMPTS = 5
+const RETRY_BASE_MS = 60_000
+const RETRY_MAX_MS = 3_600_000
+const GIVE_UP_MS = 24 * 3_600_000
+const RETRY_FORGET_MS = 7 * 24 * 3_600_000
 
 export function isTransient(e: unknown) {
+  if (e instanceof NotConnectedError) return true
   const status = (e as { status?: unknown })?.status
   if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
   return (e instanceof TypeError && e.message === 'fetch failed') || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
 }
 
-export function skipUnlessFatal(e: unknown) {
-  if (e instanceof ThrottledError || e instanceof NotConnectedError) throw e
-  console.error('[ingestion]', e)
+export const isFatal = (e: unknown) => e instanceof ThrottledError || e instanceof NotConnectedError
+
+export function report(e: unknown) {
+  if (!isFatal(e)) console.error('[ingestion]', e)
+}
+
+interface RetryState {
+  attempts: number
+  retryAt: number
 }
 
 const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'token_expired', 'token_revoked', 'not_authed'])
@@ -87,12 +92,16 @@ export function createCtx(deps: IngestionDeps) {
   const listeners = new Set<() => void>()
   const blocked = new Map<OAuthProvider, number>()
   const refreshing = new Map<string, Promise<GrantTokenResponse>>()
+  const grants = new Map<OAuthProvider, GrantTokenResponse | undefined>()
   const now = () => (deps.now?.() ?? new Date()).getTime()
   const settings = (): Settings => deps.getSettings()
 
   const grant = (p: OAuthProvider): GrantTokenResponse | undefined => {
-    const raw = deps.secrets.get(SECRET_KEYS.grant(p))
-    return raw ? (JSON.parse(raw) as GrantTokenResponse) : undefined
+    if (!grants.has(p)) {
+      const raw = deps.secrets.get(SECRET_KEYS.grant(p))
+      grants.set(p, raw ? (JSON.parse(raw) as GrantTokenResponse) : undefined)
+    }
+    return grants.get(p)
   }
 
   const connectionState = () => deps.kv.get<Partial<Record<OAuthProvider, ConnectionInfo>>>('connections') ?? {}
@@ -109,6 +118,7 @@ export function createCtx(deps: IngestionDeps) {
 
   function storeGrant(g: GrantTokenResponse) {
     deps.secrets.set(SECRET_KEYS.grant(g.provider), JSON.stringify(g))
+    grants.set(g.provider, g)
     const { login, name, team, avatarUrl } = g.account
     setConnection(g.provider, { status: 'connected', account: { login, name, team, avatarUrl }, detail: undefined })
   }
@@ -124,7 +134,7 @@ export function createCtx(deps: IngestionDeps) {
     const worker = deps.worker()
     if (!worker) throw new NotConnectedError('device not registered')
     try {
-      const g = await withTimeout(worker.refreshGrant(p, { force }))
+      const g = await worker.refreshGrant(p, { force })
       storeGrant(g)
       return g
     } catch (e) {
@@ -185,11 +195,14 @@ export function createCtx(deps: IngestionDeps) {
 
   const triggerOn = (t: TriggerId) => settings().triggers[t] !== false
 
+  function admit(signal: IngestSignal) {
+    if (triggerOn(signal.trigger)) return true
+    deps.sink.logIgnored(signal, 'ignored:trigger-off', `${TRIGGERS[signal.trigger].label} is turned off`)
+    return false
+  }
+
   async function emit(signal: IngestSignal, opts: EmitOptions = {}): Promise<IngestResult | undefined> {
-    if (!triggerOn(signal.trigger)) {
-      deps.sink.logIgnored(signal, 'ignored:trigger-off', `${TRIGGERS[signal.trigger].label} is turned off`)
-      return
-    }
+    if (!admit(signal)) return
     if (opts.filtered) {
       deps.sink.logIgnored(signal, 'ignored:filtered', opts.filtered)
       return
@@ -208,6 +221,48 @@ export function createCtx(deps: IngestionDeps) {
     return deps.sink.ingest(signal)
   }
 
+  const retries = () => deps.kv.get<Record<string, RetryState>>('ingestion.retries') ?? {}
+
+  function saveRetries(all: Record<string, RetryState>) {
+    const fresh = Object.entries(all).filter(([, r]) => now() - r.retryAt < RETRY_FORGET_MS)
+    deps.kv.set('ingestion.retries', Object.fromEntries(fresh))
+  }
+
+  function queued(prefix: string, add: string[] = []) {
+    const all = retries()
+    for (const id of add) all[prefix + id] ??= { attempts: 0, retryAt: now() }
+    saveRetries(all)
+    return Object.keys(all)
+      .filter((k) => k.startsWith(prefix) && all[k]!.attempts < MAX_ATTEMPTS && all[k]!.retryAt <= now())
+      .map((k) => k.slice(prefix.length))
+  }
+
+  async function retryable(key: string, describe: IngestSignal, run: () => Promise<unknown>, fatal = isFatal) {
+    const state = retries()[key]
+    if (state && state.attempts >= MAX_ATTEMPTS && now() - state.retryAt < GIVE_UP_MS) return true
+    if (state && state.retryAt > now()) return false
+    try {
+      await run()
+    } catch (e) {
+      if (fatal(e)) throw e
+      const attempts = (state?.attempts ?? 0) + 1
+      if (isTransient(e) && attempts < MAX_ATTEMPTS) {
+        saveRetries({ ...retries(), [key]: { attempts, retryAt: now() + Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_MAX_MS) } })
+        return false
+      }
+      report(e)
+      deps.sink.logIgnored(describe, 'ignored:filtered', `Failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${errorMessage(e)}`)
+      saveRetries({ ...retries(), [key]: { attempts: MAX_ATTEMPTS, retryAt: now() } })
+      return true
+    }
+    if (state) {
+      const all = retries()
+      delete all[key]
+      saveRetries(all)
+    }
+    return true
+  }
+
   return {
     deps,
     now,
@@ -220,7 +275,15 @@ export function createCtx(deps: IngestionDeps) {
     request,
     json,
     triggerOn,
+    admit,
     emit,
+    queued,
+    retryable,
+    forget(p: OAuthProvider, retryPrefix: string) {
+      deps.secrets.delete(SECRET_KEYS.grant(p))
+      grants.delete(p)
+      saveRetries(Object.fromEntries(Object.entries(retries()).filter(([k]) => !k.startsWith(retryPrefix))))
+    },
     onChange(listener: () => void) {
       listeners.add(listener)
       return () => void listeners.delete(listener)

@@ -1,10 +1,11 @@
-import type { IngestSignal, Settings, TriggerId } from '@gantry/shared'
-import { HttpError, skipUnlessFatal, type Ctx, type EmitOptions } from './context'
+import { unique, type IngestSignal, type Settings, type TriggerId } from '@gantry/shared'
+import { HttpError, isFatal, report, type Ctx, type EmitOptions } from './context'
 
 const API = 'https://api.github.com'
 const SOURCE = { kind: 'github', name: 'GitHub' } as const
 const SEVERITY = ['low', 'medium', 'high', 'critical']
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
+const CONCURRENCY = 4
 const PR_TRIGGERS: TriggerId[] = ['github.ci_failed', 'github.merge_conflict', 'github.changes_requested', 'github.review_requested', 'github.mention']
 
 interface User {
@@ -73,14 +74,23 @@ const gh = <T>(ctx: Ctx, path: string, init?: RequestInit) => ctx.json<T>('githu
 
 export const nextLink = (headers: Headers) => /<([^>]+)>;\s*rel="next"/.exec(headers.get('link') ?? '')?.[1]
 
-async function ghAll<T>(ctx: Ctx, path: string, pick: (body: never) => T[] = (body) => body) {
+async function ghAll<T>(ctx: Ctx, path: string, pick: (body: never) => T[] = (body) => body, done: (page: T[]) => boolean = () => false) {
   const items: T[] = []
   for (let url: string | undefined = apiUrl(path); url; ) {
-    const { body, headers } = await ctx.request<never>('github', url, { headers: HEADERS })
-    items.push(...pick(body))
-    url = nextLink(headers)
+    const { body, headers }: { body: never; headers: Headers } = await ctx.request<never>('github', url, { headers: HEADERS })
+    const page = pick(body)
+    items.push(...page)
+    url = done(page) ? undefined : nextLink(headers)
   }
   return items
+}
+
+export async function eachLimit<T>(items: T[], run: (item: T) => Promise<void>, limit = CONCURRENCY) {
+  const queue = [...items]
+  const worker = async () => {
+    for (let item = queue.shift(); item !== undefined; item = queue.shift()) await run(item)
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, worker))
 }
 
 const sameLogin = (u: User | null | undefined, login: string) => u?.login.toLowerCase() === login.toLowerCase()
@@ -124,7 +134,7 @@ async function emitTracked(ctx: Ctx, s: IngestSignal, opts: EmitOptions = {}) {
   const result = await ctx.emit(s, opts)
   if (!result) return
   const all = active(ctx)
-  all[s.trigger] = [...new Set([...(all[s.trigger] ?? []), s.externalKey])]
+  all[s.trigger] = unique([...(all[s.trigger] ?? []), s.externalKey])
   ctx.deps.kv.set('github.active', all)
 }
 
@@ -340,19 +350,17 @@ export async function applyReconciliation(ctx: Ctx, current: Current, prev = act
   const latest = active(ctx)
   for (const [trigger, complete, keys] of next) {
     const kept = (latest[trigger] ?? []).filter((k) => !complete || !prev[trigger]?.includes(k))
-    latest[trigger] = [...new Set([...kept, ...keys])]
+    latest[trigger] = unique([...kept, ...keys])
   }
   ctx.deps.kv.set('github.active', latest)
 }
 
-async function unlessFailed<T>(fn: () => Promise<T>) {
-  try {
-    return await fn()
-  } catch (e) {
-    skipUnlessFatal(e)
+const recheck = <T>(run: () => Promise<T>) =>
+  run().catch((e) => {
+    if (isFatal(e)) throw e
+    report(e)
     return undefined
-  }
-}
+  })
 
 export async function reconcileGithub(ctx: Ctx) {
   const me = ctx.account('github')?.login
@@ -370,8 +378,12 @@ export async function reconcileGithub(ctx: Ctx) {
   let repos: Promise<string[]> | undefined
   // shortcut: lists every accessible repo per reconcile when none are selected, cache the list if users hit rate limits
   const repoNames = () => (repos ??= settings.github.repositories.length ? Promise.resolve(settings.github.repositories) : githubRepositories(ctx).then((rs) => rs.map((r) => r.fullName)))
-  if (ctx.triggerOn('github.dependabot')) current['github.dependabot'] = await unlessFailed(async () => openAlerts(ctx, settings, await repoNames()))
-  if (!assignedOnly && ctx.triggerOn('github.issue')) current['github.issue'] = await unlessFailed(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? []))
+  const [alerts, repoIssues] = await Promise.all([
+    ctx.triggerOn('github.dependabot') ? recheck(async () => openAlerts(ctx, settings, await repoNames())) : undefined,
+    !assignedOnly && ctx.triggerOn('github.issue') ? recheck(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? [])) : undefined,
+  ])
+  current['github.dependabot'] = alerts
+  if (!assignedOnly) current['github.issue'] = repoIssues
   await applyReconciliation(ctx, current, prev)
   await reconcileMentions(ctx, me)
   await backfillMentions(ctx, me)
@@ -384,29 +396,27 @@ async function backfillMentions(ctx: Ctx, me: string) {
   const { nodes, complete: searched } = await searchAll(ctx, `...on Issue { ${NODE} } ...on PullRequest { ${NODE} }`, `mentions:${me} is:open archived:false updated:>=${since}`)
   const tracked = new Set(active(ctx)['github.mention'])
   let complete = searched
-  for (const n of nodes) {
-    const repo = n.repository.nameWithOwner
-    if (repoFilter(ctx.settings(), repo) || tracked.has(n.url)) continue
-    try {
-      if (!(await mentionResolution(ctx, me, n.url))) await emitTracked(ctx, signal(ctx, 'github.mention', { html_url: n.url, number: n.number, title: n.title }, repo))
-    } catch (e) {
-      skipUnlessFatal(e)
-      complete = false
-    }
-  }
+  const fresh = nodes.filter((n) => !repoFilter(ctx.settings(), n.repository.nameWithOwner) && !tracked.has(n.url))
+  await eachLimit(fresh, async (n) => {
+    const s = signal(ctx, 'github.mention', { html_url: n.url, number: n.number, title: n.title }, n.repository.nameWithOwner)
+    const settled = await ctx.retryable(`github.mention:${n.url}`, s, async () => {
+      if (!(await mentionResolution(ctx, me, n.url))) await emitTracked(ctx, s)
+    })
+    if (!settled) complete = false
+  })
   if (complete) ctx.deps.kv.set('github.mentionsSince', scannedAt)
 }
 
 async function openAlerts(ctx: Ctx, settings: Settings, repos: string[]): Promise<Tracked> {
   const signals = new Map<string, IngestSignal>()
   const severities = SEVERITY.slice(SEVERITY.indexOf(settings.github.dependabotMinSeverity)).join(',')
-  for (const fullName of repos) {
+  await eachLimit(repos, async (fullName) => {
     const alerts = await ghAll<Alert>(ctx, `/repos/${fullName}/dependabot/alerts?state=open&per_page=100&severity=${severities}`).catch((e) => {
       if (e instanceof HttpError && (e.status === 403 || e.status === 404)) return []
       throw e
     })
     for (const a of alerts) signals.set(a.html_url, alertSignal(ctx, a, fullName))
-  }
+  })
   return { signals, complete: true }
 }
 
@@ -414,13 +424,18 @@ async function openIssues(ctx: Ctx, repos: string[], tracked: string[]): Promise
   const since = ctx.deps.kv.get<string>('github.issuesSince') ?? ctx.iso()
   ctx.deps.kv.set('github.issuesSince', since)
   const signals = new Map<string, IngestSignal>()
-  for (const fullName of repos) {
-    const issues = await ghAll<Issue & { created_at: string }>(ctx, `/repos/${fullName}/issues?state=open&per_page=100`).catch((e) => {
+  await eachLimit(repos, async (fullName) => {
+    const unseen = new Set(tracked.filter((url) => url.startsWith(`https://github.com/${fullName}/issues/`)))
+    const reachedSince = (page: (Issue & { created_at: string })[]) => {
+      for (const i of page) unseen.delete(i.html_url)
+      return !unseen.size && page.some((i) => i.created_at < since)
+    }
+    const issues = await ghAll(ctx, `/repos/${fullName}/issues?state=open&sort=created&direction=desc&per_page=100`, (b: (Issue & { created_at: string })[]) => b, reachedSince).catch((e) => {
       if (e instanceof HttpError && [403, 404, 410].includes(e.status)) return []
       throw e
     })
     for (const i of issues) if (!i.pull_request && (i.created_at >= since || tracked.includes(i.html_url))) signals.set(i.html_url, signal(ctx, 'github.issue', i, fullName, { actor: i.user?.login }))
-  }
+  })
   return { signals, complete: true }
 }
 
@@ -447,21 +462,21 @@ export async function mentionResolution(ctx: Ctx, me: string, htmlUrl: string) {
 }
 
 async function reconcileMentions(ctx: Ctx, me: string) {
-  for (const key of active(ctx)['github.mention'] ?? []) {
-    const reason = await unlessFailed(() => mentionResolution(ctx, me, key))
+  await eachLimit(active(ctx)['github.mention'] ?? [], async (key) => {
+    const reason = await recheck(() => mentionResolution(ctx, me, key))
     if (reason) resolve(ctx, 'github.mention', key, reason)
-  }
+  })
 }
 
 export async function githubRepositories(ctx: Ctx) {
   const installations = await ghAll<{ id: number }>(ctx, '/user/installations?per_page=100', (b: { installations: { id: number }[] }) => b.installations)
   const names: string[] = []
-  for (const { id } of installations) {
+  await eachLimit(installations, async ({ id }) => {
     const repositories = await ghAll<Repo>(ctx, `/user/installations/${id}/repositories?per_page=100`, (b: { repositories: Repo[] }) => b.repositories)
     names.push(...repositories.map((r) => r.full_name))
-  }
+  })
   const settings = ctx.settings()
-  return names.map((fullName) => ({ fullName, selected: !repoFilter(settings, fullName) }))
+  return names.sort().map((fullName) => ({ fullName, selected: !repoFilter(settings, fullName) }))
 }
 
 export async function githubContext(ctx: Ctx, htmlUrl: string) {
