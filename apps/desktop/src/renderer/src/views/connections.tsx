@@ -19,10 +19,10 @@ const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 export function useBrowserAuth() {
   const app = useApp()
   const [pending, setPending] = useState(false)
-  useEffect(() => setPending(false), [app.account, app.connections])
+  const finished = `${app.account?.signedIn}:${app.connections.filter((c) => c.status === 'connected').map((c) => c.provider)}`
+  useEffect(() => setPending(false), [finished])
   return {
-    pending,
-    clear: () => setPending(false),
+    banner: pending && <FinishInBrowser onClose={() => setPending(false)} />,
     async start(p: Promise<void>) {
       const started = !!(await app.run(p.then(() => true)))
       if (started) setPending(true)
@@ -31,7 +31,7 @@ export function useBrowserAuth() {
   }
 }
 
-export function FinishInBrowser({ onClose }: { onClose(): void }) {
+function FinishInBrowser({ onClose }: { onClose(): void }) {
   const app = useApp()
   const [code, setCode] = useState('')
   const submit = async () => void ((await app.run(api.account.completeAuth(code.trim()).then(() => true))) && onClose())
@@ -132,7 +132,7 @@ function ConnHead({ icon, name, info, sub, children }: { icon: ReactNode; name: 
           </button>
         )}
       </div>
-      {auth.pending && <FinishInBrowser onClose={auth.clear} />}
+      {auth.banner}
       {children}
     </>
   )

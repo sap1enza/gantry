@@ -6,7 +6,7 @@ import { api } from '../bridge'
 import { SHORTCUT_LIST } from '../lib/shortcuts'
 import { SNOOZE_PRESETS } from '../lib/snooze'
 import { Github, Modal, PRESET_LABEL, Select, Tag, Toggle } from '../ui'
-import { FinishInBrowser, useBrowserAuth } from './connections'
+import { useBrowserAuth } from './connections'
 
 function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
   return (
@@ -327,7 +327,7 @@ export function PreferencesView() {
                     </button>
                   </Row>
                 )}
-                {auth.pending && <FinishInBrowser onClose={auth.clear} />}
+                {auth.banner}
                 <Row title="Device">
                   <span className="mono muted selectable">{acc?.deviceId ?? '—'}</span>
                 </Row>

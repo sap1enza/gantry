@@ -3,7 +3,7 @@ import { ArrowUpRight, Check, CircleCheck, CircleDashed, CircleDot, CircleHelp, 
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { Github, INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
-import { FinishInBrowser, useBrowserAuth } from './connections'
+import { useBrowserAuth } from './connections'
 
 const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
 const OAUTH_INPUTS = INPUTS.filter((i) => i.provider !== 'api') as Extract<(typeof INPUTS)[number], { provider: OAuthProvider }>[]
@@ -94,7 +94,7 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
               )}
             </div>
           ))}
-          {auth.pending && <FinishInBrowser onClose={auth.clear} />}
+          {auth.banner}
           <span className="tiny muted row" style={{ gap: 5 }}>
             <Lock size={10} /> Secure OAuth · Revoke access anytime
           </span>

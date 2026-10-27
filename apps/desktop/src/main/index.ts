@@ -32,16 +32,13 @@ app.setPath('userData', process.env.GANTRY_USER_DATA ?? join(app.getPath('appDat
 let window: BrowserWindow | undefined
 const linkFromArgv = (argv: string[]) => parseDeepLink(argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? '')
 let pendingCard: string | undefined
-let pendingAuthCode: string | undefined
 let resolveCard = (target: string) => target
-let completeAuth: ((code: string) => void) | undefined
+let readyForAuth = (_complete: (code: string) => void) => {}
+const authReady = new Promise<(code: string) => void>((resolve) => (readyForAuth = resolve))
 
 function openLink(link: DeepLink | undefined) {
   if (link?.kind === 'actionable') navigateTo(link.id)
-  else if (link?.kind === 'authComplete') {
-    if (completeAuth) completeAuth(link.code)
-    else pendingAuthCode = link.code
-  }
+  else if (link?.kind === 'authComplete') void authReady.then((complete) => complete(link.code))
 }
 openLink(linkFromArgv(process.argv))
 
@@ -207,11 +204,10 @@ function main() {
     return method(...(Array.isArray(args) ? args : []))
   })
 
-  completeAuth = (code) => {
+  readyForAuth((code) => {
     window?.show()
     api.account.completeAuth(code).catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
-  }
-  if (pendingAuthCode) completeAuth(pendingAuthCode)
+  })
 
   const syncAccount = () => void account.ensureDevice().then((ok) => (ok ? account.refresh() : undefined))
   syncAccount()

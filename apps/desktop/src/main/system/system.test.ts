@@ -59,16 +59,20 @@ describe('notificationFor', () => {
 })
 
 describe('AccountService', () => {
-  it('retries device registration until the worker is reachable', async () => {
+  const makeAccount = (fetch?: typeof globalThis.fetch) => {
     const db = openDb(':memory:')
-    const fetchImpl = vi.fn().mockRejectedValueOnce(new Error('offline'))
-    fetchImpl.mockResolvedValue(Response.json({ deviceId: 'd1', deviceSecret: 's', userId: 'u' }))
-    const account = new AccountService({
+    return new AccountService({
       meta: jsonTable(db, 'meta'),
       secrets: createSecretStore(db, { encrypt: (v) => Buffer.from(v), decrypt: (b) => Buffer.from(b).toString() }),
       workerUrl: () => 'http://worker.test',
-      fetch: fetchImpl as unknown as typeof fetch,
+      fetch,
     })
+  }
+
+  it('retries device registration until the worker is reachable', async () => {
+    const fetchImpl = vi.fn().mockRejectedValueOnce(new Error('offline'))
+    fetchImpl.mockResolvedValue(Response.json({ deviceId: 'd1', deviceSecret: 's', userId: 'u' }))
+    const account = makeAccount(fetchImpl as unknown as typeof fetch)
     await account.setName('Lucas')
     expect(account.get()).toMatchObject({ name: 'Lucas', deviceId: undefined })
     expect(await account.ensureDevice()).toBe(true)
@@ -77,12 +81,7 @@ describe('AccountService', () => {
   })
 
   it('asks for a name before signing in', async () => {
-    const db = openDb(':memory:')
-    const account = new AccountService({
-      meta: jsonTable(db, 'meta'),
-      secrets: createSecretStore(db, { encrypt: (v) => Buffer.from(v), decrypt: (b) => Buffer.from(b).toString() }),
-      workerUrl: () => 'http://worker.test',
-    })
+    const account = makeAccount()
     await expect(account.signIn('github', async () => {})).rejects.toThrow('Set your name first')
   })
 })

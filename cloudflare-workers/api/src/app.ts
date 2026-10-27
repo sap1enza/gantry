@@ -86,16 +86,18 @@ const parseJsonOrNull = (raw: string): unknown => {
 
 const tooMany = (c: Ctx, retryAfter: number) => c.json({ error: 'rate_limited' }, 429, { 'retry-after': String(retryAfter) })
 
-const page = (c: Ctx, message: string, status: 200 | 400 | 502 = 200) =>
-  c.html(
-    `<!doctype html><meta charset="utf-8"><title>Gantry</title><body style="font-family:system-ui;text-align:center;padding:4rem"><p>${message}</p></body>`,
-    status,
-  )
+const html = (c: Ctx, body: string, status: 200 | 400 | 502 = 200, head = '') =>
+  c.html(`<!doctype html><meta charset="utf-8">${head}<title>Gantry</title><body style="font-family:system-ui;text-align:center;padding:4rem">${body}</body>`, status)
+
+const page = (c: Ctx, message: string, status: 200 | 400 | 502 = 200) => html(c, `<p>${message}</p>`, status)
 
 const completionPage = (c: Ctx, code: string) => {
   const link = DEEP_LINKS.authComplete(code)
-  return c.html(
-    `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${link}"><title>Gantry</title><body style="font-family:system-ui;text-align:center;padding:4rem"><p>Almost done. Finish in Gantry.</p><p><a href="${link}">Open Gantry</a></p><p>Or paste this code in Gantry:</p><p><code id="code">${code}</code> <button onclick="navigator.clipboard.writeText('${code}')">Copy</button></p></body>`,
+  return html(
+    c,
+    `<p>Almost done. Finish in Gantry.</p><p><a href="${link}">Open Gantry</a></p><p>Or paste this code in Gantry:</p><p><code id="code">${code}</code> <button onclick="navigator.clipboard.writeText('${code}')">Copy</button></p>`,
+    200,
+    `<meta http-equiv="refresh" content="0;url=${link}">`,
   )
 }
 

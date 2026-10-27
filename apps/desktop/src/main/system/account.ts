@@ -79,7 +79,7 @@ export class AccountService {
     const result = await worker.completeAuth(code.trim()).catch((err: unknown) => {
       throw err instanceof WorkerError && err.status === 400 ? new Error('That code is invalid or expired') : err
     })
-    await this.refresh()
+    if (result.kind === 'signin') await this.refresh()
     return result
   }
 
