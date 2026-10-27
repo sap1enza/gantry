@@ -172,11 +172,17 @@ Actionable {
 - Instructions: auto-built from title, body, links, and fetched context (PR diff summary / Slack thread / email body). Editable.
 - Repository: inferred from source (GitHub remote match, API `repository`), else dropdown of registered repos.
 - Agent: provider + model.
-- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR). Mapped to Agent SDK permission mode + allowed tools.
+- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Mapped to Agent SDK permission mode + allowed tools.
 
 **Concurrency**: `Max concurrent agents` setting (default 3). Beyond limit → card in In Progress tagged `Queued`, auto-starts when a slot frees.
 
-**Registered repositories** (Preferences): local path → remote owner/name read from `git remote`. Used for repo inference and worktree creation.
+**Registered repositories** (Preferences): local path → remote owner/name read from `git remote`, plus an optional **setup command** run inside the worktree after `git worktree add` (e.g. `cp ../../.env . && pnpm i`). Setup output is logged to the dispatch timeline; a non-zero exit fails the dispatch before the agent starts.
+
+**Git credentials**: the Full preset requires `gh auth status` to pass on the machine. Welcome step 3 and the dispatch sheet check it; Full is disabled with a hint until it does.
+
+**Transcript**: raw Agent SDK events are stored in SQLite per dispatch, same retention as Activity. The details panel shows a condensed timeline; "Open transcript" in Review shows the full event stream.
+
+**Cost**: token usage and cost from the SDK are recorded per dispatch, shown on the card result, and summed as "today" in the sidebar status block.
 
 ---
 
@@ -265,7 +271,9 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Notifications**: per type — agent needs input, agent completed, agent failed, new actionable. Click opens the card.
 
-**General**: launch at login, appearance (System/Light/Dark), activity retention.
+**General**: launch at login, appearance (System/Light/Dark), activity retention, dock badge (count of cards awaiting input; toggle).
+
+**Keyboard shortcuts**: ⌘K search · ⌘N new actionable · ⌘1/2/3 Triage/Activity/Connections · ←/→ previous/next card · Enter open panel · Esc close panel · S start/resume · P pause · Z snooze · D dismiss · ⌘⏎ Done (in Review).
 
 **Account**: name, sign-in status, device id, sign out.
 
@@ -287,6 +295,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
 - Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
 - Webhook signature verification (GitHub HMAC, Slack signing secret).
+- Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
 - OAuth access tokens are returned to the app on connect and stored in Keychain; Worker keeps refresh tokens only where polling must survive app restarts (GitHub App installation token minting, Google refresh). Webhook routing uses the grant → user mapping.
 
