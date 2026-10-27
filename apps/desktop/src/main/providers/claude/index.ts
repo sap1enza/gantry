@@ -1,6 +1,6 @@
 import { query as sdkQuery, type CanUseTool, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AskUserQuestionInput } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
-import type { AgentEventSink, AgentProvider, AgentState, DispatchRequest } from '@gantry/shared'
+import { errorMessage, type AgentEventSink, type AgentProvider, type AgentState, type DispatchRequest } from '@gantry/shared'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { summarizeTool, toEvents } from './events'
 import { installGuard, isExecutable, scrubEnv, shellQuote, type Guard } from './guard'
-import { decide, presetOptions } from './policy'
+import { presetOptions } from './policy'
 
 export { shellQuote }
 
@@ -80,7 +80,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
 
   const interrupted = { behavior: 'deny', message: 'Interrupted by the user.', interrupt: true } as const
 
-  const canUseTool = (run: Run): CanUseTool => async (toolName, input) => {
+  const canUseTool = (run: Run, approvals: Set<string>): CanUseTool => async (toolName, input, { toolUseID }) => {
     if (toolName === 'AskUserQuestion') {
       const answers: Record<string, string> = {}
       for (const question of (input as unknown as AskUserQuestionInput).questions) {
@@ -90,8 +90,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
       }
       return { behavior: 'allow', updatedInput: { ...input, answers } }
     }
-    const decision = decide(run.request.permissionPreset, run.request.worktreePath, toolName, input)
-    if (decision.behavior !== 'ask') return decision
+    if (!approvals.delete(toolUseID)) return { behavior: 'allow' }
     const text = await ask(run, `Allow ${toolName}: ${summarizeTool(input)}?`, ['Allow', 'Deny'])
     if (text === undefined) return interrupted
     return text === 'Allow' ? { behavior: 'allow' } : { behavior: 'deny', message: `The user denied this: ${text}` }
@@ -105,6 +104,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
     run.sink({ type: 'state', state: 'running' })
     let outcome: AgentState | undefined
     let guard: Guard | undefined
+    const approvals = new Set<string>()
     try {
       const { permissionPreset, worktreePath } = run.request
       guard = await deps.guard(run.request)
@@ -117,8 +117,8 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
           abortController: run.abort,
           env: scrubEnv(agentEnv(), permissionPreset, guard),
           pathToClaudeCodeExecutable: deps.claudePath?.(),
-          canUseTool: canUseTool(run),
-          ...presetOptions(permissionPreset, worktreePath, guard),
+          canUseTool: canUseTool(run, approvals),
+          ...presetOptions(permissionPreset, worktreePath, guard, approvals),
         },
       })
       for await (const message of run.query) {
@@ -132,13 +132,14 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
         }
       }
     } catch (error) {
-      if (!run.halt) run.sink({ type: 'error', message: error instanceof Error ? error.message : String(error) })
+      if (!run.halt) run.sink({ type: 'error', message: errorMessage(error) })
       outcome = 'failed'
     } finally {
       run.close()
       run.query = undefined
       await guard?.release()
       run.active = false
+      if (!run.halt && runs.get(run.request.actionableId) === run) runs.delete(run.request.actionableId)
     }
     if (!run.halt && !outcome) run.sink({ type: 'error', message: 'Claude exited without a result.' })
     run.sink({ type: 'state', state: run.halt ?? outcome ?? 'failed' })
@@ -160,7 +161,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
         return { available: true, version: stdout.trim() }
       } catch (error) {
         const notFound = (error as NodeJS.ErrnoException).code === 'ENOENT'
-        return { available: false, reason: notFound ? 'claude was not found on PATH' : (error as Error).message }
+        return { available: false, reason: notFound ? 'claude was not found on PATH' : errorMessage(error) }
       }
     },
 

@@ -1,8 +1,7 @@
 import type { DispatchRequest, PermissionPreset } from '@gantry/shared'
-import { execFile } from 'node:child_process'
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
+import { exec, git, type Exec } from '../../system/exec'
 
 export interface Guard {
   commonDir: string
@@ -70,17 +69,20 @@ export const isExecutable = (path: string) => {
   }
 }
 
-const git = async (cwd: string, ...args: string[]) =>
-  (await promisify(execFile)('git', ['-C', cwd, ...args])).stdout.trim()
-
-export async function installGuard(request: DispatchRequest): Promise<Guard> {
+export async function installGuard(request: DispatchRequest, run: Exec = exec): Promise<Guard> {
   const cwd = request.worktreePath
-  const [gitDir, commonDir] = (await git(cwd, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir')).split('\n')
-  if ((await git(cwd, 'config', '--get', 'extensions.worktreeConfig').catch(() => '')) !== 'true') {
-    await git(cwd, 'config', 'extensions.worktreeConfig', 'true')
+  const out = async (...args: string[]) => {
+    const { code, output } = await git(run, cwd, ...args)
+    if (code) throw new Error(`git ${args.join(' ')} failed: ${output.trim()}`)
+    return output.trim()
   }
-  await git(cwd, 'config', '--worktree', '--unset', 'core.hooksPath').catch(() => '')
-  const originalHooks = await git(cwd, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks')
+  const [gitDir, commonDir] = (await out('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir')).split('\n')
+  if ((await git(run, cwd, 'config', '--get', 'extensions.worktreeConfig')).output.trim() !== 'true') {
+    await out('config', 'extensions.worktreeConfig', 'true')
+  }
+  const unsetHooksPath = async () => void (await git(run, cwd, 'config', '--worktree', '--unset', 'core.hooksPath'))
+  await unsetHooksPath()
+  const originalHooks = await out('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
   const hooksDir = join(gitDir!, 'gantry-hooks')
   rmSync(hooksDir, { recursive: true, force: true })
   mkdirSync(hooksDir, { recursive: true })
@@ -91,7 +93,7 @@ export async function installGuard(request: DispatchRequest): Promise<Guard> {
   }
   writeFileSync(join(hooksDir, 'pre-push'), prePushHook(request.permissionPreset, request.branch, originalHooks))
   chmodSync(join(hooksDir, 'pre-push'), 0o755)
-  await git(cwd, 'config', '--worktree', 'core.hooksPath', hooksDir)
+  await out('config', '--worktree', 'core.hooksPath', hooksDir)
   const ghConfigDir = join(gitDir!, 'gantry-gh')
   mkdirSync(ghConfigDir, { recursive: true })
   return {
@@ -99,6 +101,6 @@ export async function installGuard(request: DispatchRequest): Promise<Guard> {
     hooksDir,
     ghConfigDir,
     worktreeConfig: join(gitDir!, 'config.worktree'),
-    release: async () => void (await git(cwd, 'config', '--worktree', '--unset', 'core.hooksPath').catch(() => '')),
+    release: unsetHooksPath,
   }
 }

@@ -22,18 +22,6 @@ describe('decide', () => {
     ['read_only', 'Write', { file_path: 'a.ts' }, 'deny'],
     ['read_only', 'NotebookEdit', {}, 'deny'],
     ['read_only', ...bash('git status && git log -5 | head'), 'allow'],
-    ['read_only', ...bash('rg foo src'), 'allow'],
-    ['read_only', ...bash('rm -rf src'), 'deny'],
-    ['read_only', ...bash('pnpm test'), 'deny'],
-    ['read_only', ...bash('echo hi > a.ts'), 'deny'],
-    ['read_only', ...bash('cat $(rm a.ts)'), 'deny'],
-    ['read_only', ...bash('find . -delete'), 'deny'],
-    ['read_only', ...bash('ls; git commit -m x'), 'deny'],
-    ['read_only', ...bash('rg --pre ./x.sh foo'), 'deny'],
-    ['read_only', ...bash('find . -fprint out'), 'deny'],
-    ['read_only', ...bash('git diff --output=p'), 'deny'],
-    ['read_only', ...bash('tree -o out'), 'deny'],
-    ['read_only', ...bash('grep -o foo a.ts'), 'allow'],
     ['read_only', 'Skill', {}, 'deny'],
     ['read_only', 'Agent', { prompt: 'explore' }, 'allow'],
     ['read_only', 'Glob', { pattern: '~/.ssh/*' }, 'ask'],
@@ -47,18 +35,15 @@ describe('decide', () => {
     ['edit_test', 'WebSearch', { query: 'x' }, 'ask'],
     ['full', 'WebFetch', { url: 'https://x.dev' }, 'allow'],
     ['full', 'Edit', { file_path: '/etc/hosts' }, 'ask'],
-    ['edit_test', ...bash('gh api -XPOST repos/o/r/issues'), 'deny'],
     ['full', ...bash('git push --no-verify'), 'deny'],
-    ['edit_test', ...bash('git -c core.hooksPath=/dev/null commit'), 'deny'],
+    ['full', ...bash('git -c core.hooksPath=/dev/null push'), 'deny'],
     ['edit_test', 'Edit', { file_path: 'a.ts' }, 'allow'],
-    ['edit_test', ...bash('pnpm test && git commit -am fix'), 'allow'],
-    ['edit_test', ...bash('git push origin HEAD'), 'deny'],
-    ['edit_test', ...bash('git -C repo push'), 'deny'],
-    ['edit_test', ...bash('pnpm test && git push'), 'deny'],
-    ['edit_test', ...bash('gh pr create --fill'), 'deny'],
-    ['edit_test', ...bash('gh pr merge 3'), 'deny'],
-    ['edit_test', ...bash('gh api repos/o/r/issues -f title=x'), 'deny'],
-    ['edit_test', ...bash('gh pr view 3'), 'allow'],
+    ['edit_test', ...bash('git commit -m "fix push"'), 'allow'],
+    ['edit_test', ...bash('gh pr merge 3'), 'allow'],
+    ['full', ...bash('git commit -m "fix push"'), 'allow'],
+    ['full', ...bash('gh api -XPOST repos/o/r/issues'), 'ask'],
+    ['full', ...bash('gh api repos/o/r/issues -f title=x'), 'ask'],
+    ['full', ...bash('gh pr view 3'), 'allow'],
     ['edit_test', 'mcp__linear__create_issue', {}, 'ask'],
     ['full', ...bash('git push -u origin HEAD && gh pr create --fill'), 'allow'],
     ['full', ...bash('gh pr merge 3'), 'ask'],
@@ -69,7 +54,7 @@ describe('decide', () => {
   })
 
   it('tells the agent why it was denied', () => {
-    expect(decide('edit_test', WT, ...bash('git push'))).toEqual({ behavior: 'deny', message: expect.stringMatching(/not allowed/) })
+    expect(decide('full', WT, ...bash('git push --no-verify'))).toEqual({ behavior: 'deny', message: expect.stringMatching(/not allowed/) })
   })
 })
 
@@ -79,20 +64,22 @@ describe('presetOptions', () => {
     ['edit_test', 'acceptEdits', ['Bash(git push:*)', 'Bash(gh pr create:*)']],
     ['full', 'acceptEdits', []],
   ])('%s → %s mode with deny rules', (preset, mode, disallowed) => {
-    const options = presetOptions(preset, WT, guard)
+    const options = presetOptions(preset, WT, guard, new Set())
     expect(options.permissionMode).toBe(mode)
     expect(options.disallowedTools).toEqual(disallowed)
   })
 
-  it('denies through the PreToolUse hook so allow rules cannot bypass the preset', async () => {
-    const hook = presetOptions('edit_test', WT, guard).hooks!.PreToolUse![0]!.hooks[0] as HookCallback
-    const call = (tool_name: string, tool_input: Record<string, unknown>) =>
-      hook({ hook_event_name: 'PreToolUse', tool_name, tool_input } as HookInput, undefined, {
+  it('decides in the PreToolUse hook so allow rules cannot bypass the preset, recording calls that need approval', async () => {
+    const approvals = new Set<string>()
+    const hook = presetOptions('read_only', WT, guard, approvals).hooks!.PreToolUse![0]!.hooks[0] as HookCallback
+    const call = (tool_use_id: string, tool_name: string, tool_input: Record<string, unknown>) =>
+      hook({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id } as HookInput, tool_use_id, {
         signal: new AbortController().signal,
       })
-    expect(await call('Bash', { command: 'git push' })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
-    expect(await call('Read', { file_path: '/etc/passwd' })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask' } })
-    expect(await call('Bash', { command: 'pnpm test' })).toEqual({})
+    expect(await call('1', 'Skill', {})).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
+    expect(await call('2', 'Read', { file_path: '/etc/passwd' })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask' } })
+    expect(await call('3', 'Bash', { command: 'pnpm test' })).toEqual({})
+    expect([...approvals]).toEqual(['2'])
   })
 })
 
