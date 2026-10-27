@@ -90,17 +90,17 @@ export function createCtx(deps: IngestionDeps) {
     setConnection(g.provider, { status: 'connected', account: { login, name, team, avatarUrl }, detail: undefined })
   }
 
-  function refresh(p: OAuthProvider): Promise<GrantTokenResponse> {
-    const inFlight = refreshing.get(p) ?? refreshOnce(p).finally(() => refreshing.delete(p))
+  function refresh(p: OAuthProvider, force = false): Promise<GrantTokenResponse> {
+    const inFlight = refreshing.get(p) ?? refreshOnce(p, force).finally(() => refreshing.delete(p))
     refreshing.set(p, inFlight)
     return inFlight
   }
 
-  async function refreshOnce(p: OAuthProvider): Promise<GrantTokenResponse> {
+  async function refreshOnce(p: OAuthProvider, force: boolean): Promise<GrantTokenResponse> {
     const worker = deps.worker()
     if (!worker) throw new NotConnectedError('device not registered')
     try {
-      const g = await worker.refreshGrant(p)
+      const g = await worker.refreshGrant(p, { force })
       storeGrant(g)
       return g
     } catch (e) {
@@ -125,7 +125,7 @@ export function createCtx(deps: IngestionDeps) {
     if (!already) deps.sink.logConnection(p, 'throttled', `Backing off until ${new Date(until).toISOString()}`)
   }
 
-  async function json<T>(p: OAuthProvider, url: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(p: OAuthProvider, url: string, init: RequestInit = {}): Promise<{ body: T; headers: Headers }> {
     let accessToken = await token(p)
     for (let attempt = 0; ; attempt++) {
       const until = blocked.get(p)
@@ -140,7 +140,7 @@ export function createCtx(deps: IngestionDeps) {
       const body = res.status === 204 ? undefined : await res.json().catch(() => undefined)
       const rejected = res.status === 401 || (p === 'slack' && SLACK_AUTH_ERRORS.has((body as { error?: string })?.error ?? ''))
       if (rejected && attempt === 0) {
-        accessToken = (await refresh(p)).accessToken
+        accessToken = (await refresh(p, true)).accessToken
         continue
       }
       if (rejected) {
@@ -148,9 +148,11 @@ export function createCtx(deps: IngestionDeps) {
         throw new NotConnectedError(`${p} token rejected`)
       }
       if (!res.ok) throw new HttpError(res.status, url)
-      return body as T
+      return { body: body as T, headers: res.headers }
     }
   }
+
+  const json = async <T>(p: OAuthProvider, url: string, init?: RequestInit) => (await request<T>(p, url, init)).body
 
   const triggerOn = (t: TriggerId) => settings().triggers[t] !== false
 
@@ -183,6 +185,7 @@ export function createCtx(deps: IngestionDeps) {
     connectionState,
     setConnection,
     refresh,
+    request,
     json,
     triggerOn,
     emit,

@@ -1,4 +1,4 @@
-import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider } from '@gantry/shared'
+import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider, type SourceKind } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
 import { createCtx, NotConnectedError, ThrottledError, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
@@ -11,9 +11,10 @@ const MAX_CONTEXT = 8_000
 const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   github: ['github.active'],
-  slack: ['slack.pending', 'slack.followUpChecked'],
+  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt'],
   google: ['gmail.historyId'],
 }
+const SOURCE_KIND: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
   github: 'https://github.com/settings/installations',
   slack: 'https://slack.com/apps/manage',
@@ -86,6 +87,7 @@ function forget(ctx: Ctx, provider: OAuthProvider) {
   ctx.deps.secrets.delete(SECRET_KEYS.grant(provider))
   for (const key of PROVIDER_KV[provider]) ctx.deps.kv.delete(key)
   ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
+  ctx.deps.sink.markSourceDisconnected(SOURCE_KIND[provider])
 }
 
 function contextFor(ctx: Ctx, a: Actionable) {

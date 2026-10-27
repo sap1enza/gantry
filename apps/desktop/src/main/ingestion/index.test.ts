@@ -83,6 +83,19 @@ describe('tokens and rate limits', () => {
     const fetch = routeFetch([['/user', (init) => ((init?.headers as Record<string, string>).authorization === 'Bearer new' ? res({ ok: 1 }) : res({}, 401))]])
     expect(await ctx.json('github', 'https://api.github.com/user')).toEqual({ ok: 1 })
     expect(fetch).toHaveBeenCalledTimes(2)
+    expect(worker.refreshGrant).toHaveBeenCalledWith('github', { force: true })
+  })
+
+  it('marks reconnect_required when the force-refreshed token is still rejected', async () => {
+    const worker = workerWith([])
+    worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'lucas' }, 'new'))
+    const deps = fakeDeps(worker)
+    const ctx = connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' }, 'old', new Date(NOW.getTime() + 3_600_000).toISOString()))
+    const fetch = routeFetch([['/user', () => res({}, 401)]])
+    await expect(ctx.json('github', 'https://api.github.com/user')).rejects.toThrow('token rejected')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(worker.refreshGrant).toHaveBeenCalledTimes(1)
+    expect(ctx.connectionState().github?.status).toBe('reconnect_required')
   })
 
   it('shares one in-flight refresh between concurrent callers', async () => {
@@ -100,7 +113,7 @@ describe('tokens and rate limits', () => {
     const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }, 'old', new Date(NOW.getTime() + 60_000).toISOString()))
     routeFetch([['gmail', () => res({})]])
     await ctx.json('google', 'https://gmail.googleapis.com/x')
-    expect(worker.refreshGrant).toHaveBeenCalledWith('google')
+    expect(worker.refreshGrant).toHaveBeenCalledWith('google', { force: false })
   })
 
   it('marks reconnect_required when refresh is rejected', async () => {
@@ -156,5 +169,12 @@ describe('createIngestion', () => {
     expect(deps.secrets.get('grant.slack')).toBeUndefined()
     expect(deps.kv.get('slack.pending')).toBeUndefined()
     expect(ingestion.connections()[1]).toMatchObject({ provider: 'slack', status: 'disconnected' })
+    expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('slack')
+  })
+
+  it('marks Google cards as email source disconnected', async () => {
+    const deps = fakeDeps({ revokeGrant: vi.fn(async () => undefined) })
+    await createIngestion(deps).disconnect('google')
+    expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('email')
   })
 })
