@@ -369,6 +369,11 @@ export class Board implements IngestSink {
 
   logConnection(provider: string, status: string, detail?: string) {
     this.log({ type: 'connection', title: `${provider}: ${status.replaceAll('_', ' ')}`, detail, source: provider, actor: { kind: 'source', name: provider } })
+    if (status !== 'connected') return
+    const kind = provider === 'google' ? 'email' : provider
+    for (const card of this.all()) {
+      if (card.source.kind === kind && card.tags.includes(TAGS.sourceDisconnected)) this.update(card.id, (a) => (a.tags = without(a.tags, TAGS.sourceDisconnected)))
+    }
   }
 
   markSourceDisconnected(kind: SourceKind) {

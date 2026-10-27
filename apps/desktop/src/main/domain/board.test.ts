@@ -160,6 +160,16 @@ describe('source disconnect', () => {
     expect(board.must(gh!).tags.filter((t) => t === TAGS.sourceDisconnected)).toHaveLength(1)
     expect(board.must(api!).tags).not.toContain(TAGS.sourceDisconnected)
   })
+
+  it('clears the tag when the source reconnects', () => {
+    const { board } = setup()
+    const { actionableId: gh } = board.ingest(signal())
+    board.markSourceDisconnected('github')
+    board.logConnection('slack', 'connected')
+    expect(board.must(gh!).tags).toContain(TAGS.sourceDisconnected)
+    board.logConnection('github', 'connected')
+    expect(board.must(gh!).tags).not.toContain(TAGS.sourceDisconnected)
+  })
 })
 
 describe('guarded user transitions', () => {
