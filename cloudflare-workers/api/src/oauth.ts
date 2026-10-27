@@ -17,6 +17,7 @@ export interface ExchangeResult extends TokenSet {
   routingKeys: string[]
 }
 
+const MAX_INSTALLATION_PAGES = 10
 const GITHUB_HEADERS = { accept: 'application/vnd.github+json', 'user-agent': 'gantry-worker' }
 
 const providerConfig = (env: Env, provider: OAuthProvider) =>
@@ -97,12 +98,13 @@ async function githubIdentity(fetchImpl: typeof fetch, accessToken: string) {
 
 export async function githubInstallationKeys(fetchImpl: typeof fetch, accessToken: string) {
   const keys: string[] = []
-  for (let page = 1; ; page++) {
+  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
     const data = await getJson(fetchImpl, `https://api.github.com/user/installations?per_page=100&page=${page}`, accessToken, GITHUB_HEADERS)
     const installations: { id: number }[] = data.installations ?? []
     keys.push(...installations.map((i) => `installation:${i.id}`))
-    if (installations.length < 100) return keys
+    if (installations.length < 100) break
   }
+  return keys
 }
 
 export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: OAuthStartProvider, code: string): Promise<ExchangeResult> {

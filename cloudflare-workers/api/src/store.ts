@@ -34,14 +34,23 @@ export async function hitRateLimit(db: D1Database, key: string, limit = RATE_LIM
   return row!.count > limit ? Math.ceil((windowStart + windowMs - nowMs) / 1000) : 0
 }
 
-export const isDelivered = async (db: D1Database, id: string) =>
-  Boolean(await db.prepare('SELECT 1 FROM webhook_deliveries WHERE id = ? AND expires_at > ?').bind(id, now()).first())
-
-export const markDelivered = (db: D1Database, id: string) =>
-  db
-    .prepare('INSERT OR REPLACE INTO webhook_deliveries (id, expires_at) VALUES (?, ?)')
-    .bind(id, new Date(Date.now() + DELIVERY_DEDUPE_MS).toISOString())
-    .run()
+export async function enqueueOnce(db: D1Database, deliveryKey: string, userIds: string[], payload: InboxPayload) {
+  const claimed = await db
+    .prepare(
+      `INSERT INTO webhook_deliveries (id, expires_at) VALUES (?1, ?2)
+       ON CONFLICT (id) DO UPDATE SET expires_at = excluded.expires_at WHERE expires_at < ?3 RETURNING id`,
+    )
+    .bind(deliveryKey, new Date(Date.now() + DELIVERY_DEDUPE_MS).toISOString(), now())
+    .first()
+  if (!claimed) return false
+  try {
+    await enqueue(db, userIds, payload)
+  } catch (err) {
+    await db.prepare('DELETE FROM webhook_deliveries WHERE id = ?').bind(deliveryKey).run()
+    throw err
+  }
+  return true
+}
 
 export async function findUsersByRoutingKey(db: D1Database, provider: OAuthProvider, keys: string[]) {
   if (!keys.length) return []

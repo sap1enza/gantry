@@ -40,8 +40,7 @@ import {
   findUsersByRoutingKey,
   getGrant,
   hitRateLimit,
-  isDelivered,
-  markDelivered,
+  enqueueOnce,
   mergeUsers,
   now,
   type GrantRow,
@@ -61,6 +60,7 @@ const WEBHOOK_BODY_LIMIT = 1024 * 1024
 const INBOX_RESPONSE_BYTES = 4 * 1024 * 1024
 const DEVICE_REGISTRATIONS_PER_HOUR = 10
 const HOUR_MS = 60 * 60 * 1000
+const ROUTING_REFRESH_GRANTS = 25
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(100) })
 const ackSchema = z.object({ ids: z.array(z.string()).max(1000) })
@@ -236,7 +236,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const { results } = await c.env.DB.prepare(
       `SELECT id, payload, received_at FROM (
          SELECT id, payload, received_at, ROW_NUMBER() OVER w AS n, SUM(LENGTH(CAST(payload AS BLOB))) OVER w AS bytes
-         FROM inbox WHERE user_id = ? AND expires_at > ? WINDOW w AS (ORDER BY received_at, id) ORDER BY received_at, id LIMIT ?
+         FROM (SELECT * FROM inbox WHERE user_id = ? AND expires_at > ? ORDER BY received_at, id LIMIT ?) WINDOW w AS (ORDER BY received_at, id)
        ) WHERE n = 1 OR bytes <= ? ORDER BY received_at, id`,
     )
       .bind(c.get('userId'), now(), limit, INBOX_RESPONSE_BYTES)
@@ -435,9 +435,11 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   })
 
   async function refreshGithubRouting(c: Ctx) {
-    // shortcut: re-lists installations for every connected GitHub grant with a live token, scope by org membership once there are many users
-    const { results } = await c.env.DB.prepare("SELECT * FROM grants WHERE provider = 'github' AND status = 'connected' AND (expires_at IS NULL OR expires_at > ?)")
-      .bind(now())
+    // shortcut: re-lists installations for the most recently refreshed live GitHub grants only, others catch up on their next token refresh; scope by org membership once there are many users
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM grants WHERE provider = 'github' AND status = 'connected' AND (expires_at IS NULL OR expires_at > ?) ORDER BY updated_at DESC LIMIT ?",
+    )
+      .bind(now(), ROUTING_REFRESH_GRANTS)
       .all<GrantRow>()
     const failed = (await Promise.allSettled(
       results.map(async (row) => {
@@ -458,15 +460,14 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const deliveryId = c.req.header('x-github-delivery') ?? ''
     const installationKey = payload.installation && `installation:${payload.installation.id}`
     if (!installationKey) return c.json({ delivered: 0 })
-    const dedupeKey = deliveryId && `github:${deliveryId}`
-    if (dedupeKey && (await isDelivered(c.env.DB, dedupeKey))) return c.json({ delivered: 0 })
     if (event === 'installation_repositories' || (event === 'installation' && payload.action === 'created')) await refreshGithubRouting(c)
     if (event === 'installation' && payload.action === 'created' && payload.sender) {
       await addRoutingKey(c.env.DB, 'github', `user:${payload.sender.id}`, installationKey)
     }
     const users = await findUsersByRoutingKey(c.env.DB, 'github', [installationKey])
-    await enqueue(c.env.DB, users, { kind: 'github.webhook', event, deliveryId, payload })
-    if (dedupeKey) await markDelivered(c.env.DB, dedupeKey)
+    const item: InboxPayload = { kind: 'github.webhook', event, deliveryId, payload }
+    if (!deliveryId) await enqueue(c.env.DB, users, item)
+    else if (!(await enqueueOnce(c.env.DB, `github:${deliveryId}`, users, item))) return c.json({ delivered: 0 })
     return c.json({ delivered: users.length })
   })
 
@@ -479,13 +480,12 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const payload = parseJsonOrNull(raw) as { type?: string; challenge?: string; event_id?: string; authorizations?: { team_id: string; user_id: string }[] } | null
     if (!payload) return c.json({ error: 'invalid_json' }, 400)
     if (payload.type === 'url_verification') return c.json({ challenge: payload.challenge })
-    const dedupeKey = payload.event_id && `slack:${payload.event_id}`
-    if (dedupeKey && (await isDelivered(c.env.DB, dedupeKey))) return c.json({ delivered: 0 })
     // shortcut: Slack only includes one authorization per event, call apps.event.authorizations.list when several Gantry users share a channel
     const keys = (payload.authorizations ?? []).map((a) => `${a.team_id}:${a.user_id}`)
     const users = await findUsersByRoutingKey(c.env.DB, 'slack', keys)
-    await enqueue(c.env.DB, users, { kind: 'slack.event', payload })
-    if (dedupeKey) await markDelivered(c.env.DB, dedupeKey)
+    const item: InboxPayload = { kind: 'slack.event', payload }
+    if (!payload.event_id) await enqueue(c.env.DB, users, item)
+    else if (!(await enqueueOnce(c.env.DB, `slack:${payload.event_id}`, users, item))) return c.json({ delivered: 0 })
     return c.json({ delivered: users.length })
   })
 
