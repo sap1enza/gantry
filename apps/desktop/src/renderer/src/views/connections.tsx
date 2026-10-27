@@ -1,9 +1,9 @@
-import { TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
+import { GMAIL_CATEGORIES, TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
 import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, Mail, RefreshCw, Send, ShieldCheck, Webhook, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ago, clock, Github, Modal, Popover, Tag, toggle, Toggle, usePopover } from '../ui'
+import { ago, clock, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
 
 const STATUS_LABEL = { connected: 'Connected', reconnect_required: 'Reconnect required', disconnected: 'Disconnected' } as const
 const TRIGGER_HINT: Partial<Record<TriggerId, string>> = {
@@ -13,8 +13,30 @@ const TRIGGER_HINT: Partial<Record<TriggerId, string>> = {
   'email.new': 'Create an actionable for incoming messages in your inbox.',
 }
 const LLM_TRIGGERS = new Set<TriggerId>(['slack.unreplied', 'slack.follow_up'])
-const CATEGORIES = ['promotions', 'social', 'updates', 'forums']
+const SEVERITIES = (['low', 'medium', 'high', 'critical'] as const).map((v) => ({ value: v, label: `≥ ${v}` }))
+const ISSUE_SCOPES = [
+  { value: 'assigned', label: 'Assigned to me' },
+  { value: 'all', label: 'Any new issue' },
+] as const
+const UNREPLIED_MINUTES = [15, 30, 60, 120, 240].map((m) => ({ value: String(m), label: `${m} minutes` }))
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
+
+type ListSection = 'slack' | 'email'
+type Section = 'github' | ListSection
+
+function useSection<K extends Section>(settings: Settings, key: K) {
+  const app = useApp()
+  return (patch: Partial<Settings[K]>) => app.updateSettings({ [key]: { ...settings[key], ...patch } })
+}
+
+function ListInputs<K extends ListSection>({ rows, values, onSave }: { rows: readonly (readonly [keyof Settings[K], string, string])[]; values: Settings[K]; onSave: (patch: Partial<Settings[K]>) => void }) {
+  return rows.map(([key, label, placeholder]) => (
+    <div key={String(key)} className="row">
+      <span className="small muted" style={{ width: 120 }}>{label}</span>
+      <input className="field grow" aria-label={label} placeholder={placeholder} defaultValue={(values[key] as string[]).join(', ')} onBlur={(e) => onSave({ [key]: list(e.target.value) } as Partial<Settings[K]>)} />
+    </div>
+  ))
+}
 
 export function useBrowserAuth() {
   const app = useApp()
@@ -160,12 +182,11 @@ function TriggerRow({ id, settings, children }: { id: TriggerId; settings: Setti
 const triggersFor = (source: string) => (Object.keys(TRIGGERS) as TriggerId[]).filter((id) => TRIGGERS[id].source === source)
 
 function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settings }) {
-  const app = useApp()
   const pop = usePopover()
   const [repos, setRepos] = useState<{ fullName: string; selected: boolean }[]>([])
   useEffect(() => void (info.status === 'connected' && api.connections.githubRepositories().then(setRepos)), [info.status])
   const selected = settings.github.repositories
-  const setGithub = (patch: Partial<Settings['github']>) => app.updateSettings({ github: { ...settings.github, ...patch } })
+  const setGithub = useSection(settings, 'github')
   return (
     <div className="conn">
       <ConnHead icon={<Github size={18} />} name="GitHub" info={info} sub={`${selected.length} repositories`}>
@@ -196,19 +217,10 @@ function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settin
           {triggersFor('github').map((id) => (
             <TriggerRow key={id} id={id} settings={settings}>
               {id === 'github.dependabot' && (
-                <select className="select" aria-label="Minimum severity" value={settings.github.dependabotMinSeverity} onChange={(e) => setGithub({ dependabotMinSeverity: e.target.value as Settings['github']['dependabotMinSeverity'] })}>
-                  {(['low', 'medium', 'high', 'critical'] as const).map((v) => (
-                    <option key={v} value={v}>
-                      ≥ {v}
-                    </option>
-                  ))}
-                </select>
+                <Select label="Minimum severity" value={settings.github.dependabotMinSeverity} options={SEVERITIES} onChange={(v) => setGithub({ dependabotMinSeverity: v })} />
               )}
               {id === 'github.issue' && (
-                <select className="select" aria-label="Issues scope" value={settings.github.issuesScope} onChange={(e) => setGithub({ issuesScope: e.target.value as Settings['github']['issuesScope'] })}>
-                  <option value="assigned">Assigned to me</option>
-                  <option value="all">Any new issue</option>
-                </select>
+                <Select label="Issues scope" value={settings.github.issuesScope} options={ISSUE_SCOPES} onChange={(v) => setGithub({ issuesScope: v })} />
               )}
             </TriggerRow>
           ))}
@@ -219,8 +231,7 @@ function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settin
 }
 
 function SlackCard({ info, settings }: { info: ConnectionInfo; settings: Settings }) {
-  const app = useApp()
-  const setSlack = (patch: Partial<Settings['slack']>) => app.updateSettings({ slack: { ...settings.slack, ...patch } })
+  const setSlack = useSection(settings, 'slack')
   return (
     <div className="conn">
       <ConnHead icon={<Hash size={18} />} name="Slack" info={info}>
@@ -234,22 +245,16 @@ function SlackCard({ info, settings }: { info: ConnectionInfo; settings: Setting
         <div className="box" style={{ gap: 10, padding: 12 }}>
           <div className="row">
             <span className="muted">Check for unreplied mentions after</span>
-            <select className="select" style={{ marginLeft: 'auto' }} aria-label="Unreplied after" value={settings.slack.unrepliedAfterMinutes} onChange={(e) => setSlack({ unrepliedAfterMinutes: Number(e.target.value) })}>
-              {[15, 30, 60, 120, 240].map((m) => (
-                <option key={m} value={m}>
-                  {m} minutes
-                </option>
-              ))}
-            </select>
+            <Select style={{ marginLeft: 'auto' }} label="Unreplied after" value={String(settings.slack.unrepliedAfterMinutes)} options={UNREPLIED_MINUTES} onChange={(v) => setSlack({ unrepliedAfterMinutes: Number(v) })} />
           </div>
-          <div className="row">
-            <span className="muted" style={{ width: 120 }}>Allow channels</span>
-            <input className="field grow" placeholder="#engineering, #platform (empty = all)" defaultValue={settings.slack.channelAllow.join(', ')} onBlur={(e) => setSlack({ channelAllow: list(e.target.value) })} />
-          </div>
-          <div className="row">
-            <span className="muted" style={{ width: 120 }}>Ignore channels</span>
-            <input className="field grow" placeholder="#random" defaultValue={settings.slack.channelDeny.join(', ')} onBlur={(e) => setSlack({ channelDeny: list(e.target.value) })} />
-          </div>
+          <ListInputs<'slack'>
+            rows={[
+              ['channelAllow', 'Allow channels', '#engineering, #platform (empty = all)'],
+              ['channelDeny', 'Ignore channels', '#random'],
+            ]}
+            values={settings.slack}
+            onSave={setSlack}
+          />
           <span className="muted">AI suggestions include the original Slack message so you can verify context before dispatching.</span>
         </div>
       </ConnHead>
@@ -258,9 +263,8 @@ function SlackCard({ info, settings }: { info: ConnectionInfo; settings: Setting
 }
 
 function EmailCard({ info, settings }: { info: ConnectionInfo; settings: Settings }) {
-  const app = useApp()
   const e = settings.email
-  const setEmail = (patch: Partial<Settings['email']>) => app.updateSettings({ email: { ...e, ...patch } })
+  const setEmail = useSection(settings, 'email')
   return (
     <div className="conn">
       <ConnHead icon={<Mail size={18} />} name="Email" info={info}>
@@ -277,25 +281,22 @@ function EmailCard({ info, settings }: { info: ConnectionInfo; settings: Setting
         </div>
         <div className="trigger">
           <span className="grow muted">Exclude categories</span>
-          {CATEGORIES.map((c) => (
+          {GMAIL_CATEGORIES.map((c) => (
             <label key={c} className="check">
               <input type="checkbox" checked={e.excludeCategories.includes(c)} onChange={() => setEmail({ excludeCategories: toggle(e.excludeCategories, c) })} />
               {c[0]!.toUpperCase() + c.slice(1)}
             </label>
           ))}
         </div>
-        {(
-          [
+        <ListInputs<'email'>
+          rows={[
             ['domainAllow', 'Only from domains', 'acme.dev, northstar.io'],
             ['domainDeny', 'Ignore domains', 'newsletter.com'],
             ['labels', 'Only with labels', 'Clients'],
-          ] as const
-        ).map(([key, label, ph]) => (
-          <div key={key} className="row">
-            <span className="small muted" style={{ width: 120 }}>{label}</span>
-            <input className="field grow" placeholder={ph} defaultValue={e[key].join(', ')} onBlur={(ev) => setEmail({ [key]: list(ev.target.value) })} />
-          </div>
-        ))}
+          ]}
+          values={e}
+          onSave={setEmail}
+        />
         <div className="trigger">
           <div className="grow">
             <span className="row" style={{ gap: 6 }}>

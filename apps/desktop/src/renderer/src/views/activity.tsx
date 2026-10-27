@@ -1,4 +1,4 @@
-import { EVENT_TYPES, SOURCE_KINDS, type SourceKind, type ActivityEvent, type ActivityQuery, type EventType } from '@gantry/shared'
+import { EVENT_TYPES, PROVIDER_SOURCE, SOURCE_KINDS, unique, type OAuthProvider, type SourceKind, type ActivityEvent, type ActivityQuery, type EventType } from '@gantry/shared'
 import { Calendar, ChevronDown, Download, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useApp, usePush } from '../app'
@@ -50,11 +50,13 @@ const RANGES = [
   { id: '30d', label: 'Last 30 days', days: 30 },
   { id: 'all', label: 'All time', days: -1 },
 ] as const
+const PAGE = 25
 
 const iconKind = (e: ActivityEvent): SourceKind | 'agent' => {
   const name = e.source.toLowerCase()
   if (e.actor.kind === 'agent' || name === 'claude code') return 'agent'
-  return name === 'google' ? 'email' : (SOURCE_KINDS.find((k) => name === k || name === SOURCE_LABELS[k].toLowerCase()) ?? 'api')
+  if (Object.hasOwn(PROVIDER_SOURCE, name)) return PROVIDER_SOURCE[name as OAuthProvider]
+  return SOURCE_KINDS.find((k) => name === k || name === SOURCE_LABELS[k].toLowerCase()) ?? 'api'
 }
 
 const sinceFor = (days: number) => {
@@ -80,7 +82,7 @@ export function ActivityView() {
   const [range, setRange] = useState<(typeof RANGES)[number]['id']>('today')
   const [text, setText] = useState('')
   const [events, setEvents] = useState<ActivityEvent[]>([])
-  const [cursor, setCursor] = useState<string>()
+  const [more, setMore] = useState(false)
   const [totalToday, setTotalToday] = useState(0)
   const [cardLabel, setCardLabel] = useState<string>()
   const typePop = usePopover()
@@ -88,20 +90,20 @@ export function ActivityView() {
   const datePop = usePopover()
   const exportPop = usePopover()
 
-  const query = useMemo<ActivityQuery>(
-    () => ({ types, sources, actionableId: app.activityCard, text: text.trim() || undefined, since: sinceFor(RANGES.find((r) => r.id === range)!.days), limit: 25 }),
+  const filters = useMemo<ActivityQuery>(
+    () => ({ types, sources, actionableId: app.activityCard, text: text.trim() || undefined, since: sinceFor(RANGES.find((r) => r.id === range)!.days) }),
     [types, sources, app.activityCard, text, range],
   )
-  const load = useCallback(
-    async (more?: string) => {
-      const res = await run(api.activity.list({ ...query, cursor: more }))
-      if (!res) return
-      setEvents((list) => (more ? [...list, ...res.events] : res.events))
-      setCursor(res.nextCursor)
-      setTotalToday(res.totalToday)
-    },
-    [query, run],
-  )
+  const [page, setPage] = useState({ filters, limit: PAGE })
+  const limit = page.filters === filters ? page.limit : PAGE
+  const query = useMemo(() => ({ ...filters, limit }), [filters, limit])
+  const load = useCallback(async () => {
+    const res = await run(api.activity.list(query))
+    if (!res) return
+    setEvents(res.events)
+    setMore(!!res.nextCursor)
+    setTotalToday(res.totalToday)
+  }, [query, run])
   useEffect(() => {
     const t = setTimeout(() => void load(), text ? 150 : 0)
     return () => clearTimeout(t)
@@ -111,15 +113,17 @@ export function ActivityView() {
   }, [app.activityCard])
   usePush('activity.appended', ({ event }) => {
     setTotalToday((n) => n + 1)
-    if (matches(event, query)) setEvents((list) => [event, ...list])
+    if (!matches(event, query)) return
+    if (events.length >= limit) setMore(true)
+    setEvents((list) => [event, ...list].slice(0, limit))
   })
 
   const exportLog = async (format: 'json' | 'csv') => {
     exportPop.close()
-    const path = await app.run(api.activity.export(format, { ...query, cursor: undefined, limit: undefined }))
+    const path = await app.run(api.activity.export(format, filters))
     if (path) app.toast(`Exported to ${path}`)
   }
-  const sourceOptions = [...new Set([...sources, ...events.map((e) => e.source)])].sort()
+  const sourceOptions = useMemo(() => unique([...sources, ...events.map((e) => e.source)]).sort(), [sources, events])
   const chip = CHIPS.find((c) => (c.types ?? []).join() === types.join())
 
   return (
@@ -255,8 +259,8 @@ export function ActivityView() {
           <span className="small muted">
             Showing {events.length} {range === 'today' ? `of ${totalToday} events today` : 'events'} · All times local
           </span>
-          {cursor && (
-            <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => load(cursor)}>
+          {more && (
+            <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setPage({ filters, limit: limit + PAGE })}>
               <ChevronDown size={12} /> Load earlier events
             </button>
           )}

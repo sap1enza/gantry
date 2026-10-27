@@ -1,4 +1,4 @@
-import { PERMISSION_PRESETS, type LlmProvider, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
+import { LLM_DEFAULT_MODELS, PERMISSION_PRESETS, type LlmProvider, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
 import { ArrowUpRight, FolderCheck, Mail, Plus, Trash2 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp } from '../app'
@@ -29,8 +29,6 @@ function Group({ title, sub, children, className = 'rows' }: { title: string; su
     </div>
   )
 }
-
-const LLM_DEFAULT_MODEL: Record<LlmProvider, string> = { anthropic: 'claude-haiku-5-5', openai: 'gpt-5-mini', openai_compatible: '' }
 
 export function PreferencesView() {
   const app = useApp()
@@ -189,7 +187,7 @@ export function PreferencesView() {
                     { value: 'openai', label: 'OpenAI' },
                     { value: 'openai_compatible', label: 'OpenAI-compatible URL' },
                   ]}
-                  onChange={(v) => v !== s.llm.provider && set({ llm: { ...s.llm, provider: v, model: LLM_DEFAULT_MODEL[v] } })}
+                  onChange={(v) => v !== s.llm.provider && set({ llm: { ...s.llm, provider: v, model: LLM_DEFAULT_MODELS[v] } })}
                 />
               </Row>
               <Row title="Model">

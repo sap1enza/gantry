@@ -3,7 +3,7 @@ import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, 
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
-import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover } from '../ui'
+import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover } from '../ui'
 import { DetailsPanel } from './details'
 import { Welcome, WelcomeBanner } from './welcome'
 
@@ -257,13 +257,7 @@ function Toolbar() {
           ))}
         </Popover>
       )}
-      <select className="select" style={{ height: 25, fontSize: 11 }} aria-label="Sort" value={app.sort} onChange={(e) => app.setSort(e.target.value as Sort)}>
-        {SORTS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      <Select style={{ height: 25, fontSize: 11 }} label="Sort" value={app.sort} options={SORTS} onChange={app.setSort} />
       <span className="small muted">Updated {ago(refreshedAt)}</span>
       <button
         className="icon-btn"

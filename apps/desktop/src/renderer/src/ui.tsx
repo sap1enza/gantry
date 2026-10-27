@@ -1,4 +1,4 @@
-import type { Actionable, CardAction, Priority, SourceKind } from '@gantry/shared'
+import { PROVIDER_SOURCE, unique, type Actionable, type CardAction, type OAuthProvider, type Priority, type SourceKind } from '@gantry/shared'
 import {
   Check,
   Clock,
@@ -14,7 +14,7 @@ import {
   X,
   type LucideProps,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { parseMarkdown, type Inline } from './lib/markdown'
 
 export function Github(props: LucideProps) {
@@ -35,19 +35,15 @@ const SOURCE_ICONS: Record<SourceKind, (p: LucideProps) => ReactNode> = {
   manual: PencilLine,
 }
 export const SOURCE_LABELS: Record<SourceKind, string> = { github: 'GitHub', slack: 'Slack', email: 'Email', api: 'API', manual: 'Manual' }
-export const INPUTS = [
-  { provider: 'github', kind: 'github' },
-  { provider: 'slack', kind: 'slack' },
-  { provider: 'google', kind: 'email' },
-  { provider: 'api', kind: 'api' },
-] as const
+export const OAUTH_INPUTS = (Object.keys(PROVIDER_SOURCE) as OAuthProvider[]).map((provider) => ({ provider, kind: PROVIDER_SOURCE[provider] }))
+export const INPUTS: { provider: OAuthProvider | 'api'; kind: SourceKind }[] = [...OAUTH_INPUTS, { provider: 'api', kind: 'api' }]
 
 export function SourceIcon({ kind, size = 13 }: { kind: SourceKind | 'agent'; size?: number }) {
   const Icon = kind === 'agent' ? SquareTerminal : SOURCE_ICONS[kind]
   return <Icon size={size} />
 }
 
-export const sourceLabel = (s: Actionable['source']) => (s.kind === 'api' ? `${s.name} · API` : [...new Set([SOURCE_LABELS[s.kind], s.name])].join(' · '))
+export const sourceLabel = (s: Actionable['source']) => (s.kind === 'api' ? `${s.name} · API` : unique([SOURCE_LABELS[s.kind], s.name]).join(' · '))
 
 export const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
 
@@ -101,9 +97,9 @@ export function Toggle({ checked, onChange, disabled, label }: { checked: boolea
   return <button className="toggle" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)} />
 }
 
-export function Select<T extends string>({ value, options, onChange, label, className }: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string; className?: string }) {
+export function Select<T extends string>({ value, options, onChange, label, className, style }: { value: T; options: readonly { value: T; label: string }[]; onChange: (v: T) => void; label: string; className?: string; style?: CSSProperties }) {
   return (
-    <select className={`select ${className ?? ''}`} aria-label={label} value={value} onChange={(e) => onChange(e.target.value as T)}>
+    <select className={`select ${className ?? ''}`} style={style} aria-label={label} value={value} onChange={(e) => onChange(e.target.value as T)}>
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
@@ -229,12 +225,13 @@ export function Markdown({ source, onLink }: { source: string; onLink: (url: str
 export const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 export const clockSeconds = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 export const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?'
+const relative = new Intl.RelativeTimeFormat(undefined, { style: 'short' })
 export function ago(iso?: string) {
   if (!iso) return 'never'
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
   if (s < 45) return 'just now'
-  if (s < 3600) return `${Math.round(s / 60)} minute${Math.round(s / 60) === 1 ? '' : 's'} ago`
-  if (s < 86_400) return `${Math.round(s / 3600)} h ago`
+  if (s < 3600) return relative.format(-Math.round(s / 60), 'minute')
+  if (s < 86_400) return relative.format(-Math.round(s / 3600), 'hour')
   return new Date(iso).toLocaleDateString()
 }
 export const elapsed = (iso: string, now: number) => {
