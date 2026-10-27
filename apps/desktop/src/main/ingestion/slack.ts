@@ -71,7 +71,7 @@ async function channelName(ctx: Ctx, channel: string) {
   }
 }
 
-export async function channelFilter(ctx: Ctx, channel: string, channelType?: string) {
+async function channelFilter(ctx: Ctx, channel: string, channelType?: string) {
   const { channelAllow, channelDeny } = ctx.settings().slack
   if (DM_TYPES.has(channelType ?? '') || channel.startsWith('D') || (!channelAllow.length && !channelDeny.length)) return undefined
   const entries = (list: string[]) => list.map((entry) => entry.replace(/^#/, ''))

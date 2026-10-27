@@ -373,8 +373,8 @@ export async function reconcileGithub(ctx: Ctx) {
   if (ctx.triggerOn('github.dependabot')) current['github.dependabot'] = await unlessFailed(async () => openAlerts(ctx, settings, await repoNames()))
   if (!assignedOnly && ctx.triggerOn('github.issue')) current['github.issue'] = await unlessFailed(async () => openIssues(ctx, await repoNames(), prev['github.issue'] ?? []))
   await applyReconciliation(ctx, current, prev)
-  await backfillMentions(ctx, me)
   await reconcileMentions(ctx, me)
+  await backfillMentions(ctx, me)
 }
 
 async function backfillMentions(ctx: Ctx, me: string) {
@@ -382,10 +382,11 @@ async function backfillMentions(ctx: Ctx, me: string) {
   const scannedAt = ctx.iso()
   const since = ctx.deps.kv.get<string>('github.mentionsSince') ?? scannedAt
   const { nodes } = await searchAll(ctx, `...on Issue { ${NODE} } ...on PullRequest { ${NODE} }`, `mentions:${me} is:open archived:false updated:>=${since}`)
+  const tracked = new Set(active(ctx)['github.mention'])
   let complete = true
   for (const n of nodes) {
     const repo = n.repository.nameWithOwner
-    if (repoFilter(ctx.settings(), repo) || active(ctx)['github.mention']?.includes(n.url)) continue
+    if (repoFilter(ctx.settings(), repo) || tracked.has(n.url)) continue
     try {
       if (!(await mentionResolution(ctx, me, n.url))) await emitTracked(ctx, signal(ctx, 'github.mention', { html_url: n.url, number: n.number, title: n.title }, repo))
     } catch (e) {

@@ -46,7 +46,8 @@ export function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Prom
 }
 
 export function isTransient(e: unknown) {
-  if (e instanceof HttpError || e instanceof LlmError) return e.status === 408 || e.status === 429 || e.status >= 500
+  const status = (e as { status?: unknown })?.status
+  if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
   return e instanceof TypeError || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
 }
 

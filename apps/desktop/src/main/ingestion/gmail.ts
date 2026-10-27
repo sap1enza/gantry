@@ -1,5 +1,5 @@
 import type { IngestSignal, Settings } from '@gantry/shared'
-import { HttpError, isTransient, NotConnectedError, ThrottledError, type Ctx } from './context'
+import { HttpError, isTransient, skipUnlessFatal, type Ctx } from './context'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const NEEDS_ACTION_INSTRUCTION =
@@ -118,13 +118,14 @@ export async function pollGmail(ctx: Ctx) {
       const llm = f.llmGate ? { instruction: NEEDS_ACTION_INSTRUCTION, content: `From: ${header(m, 'From')}\nSubject: ${header(m, 'Subject')}\n\n${m.snippet ?? ''}` } : undefined
       await ctx.emit(emailSignal(ctx, m), { filtered, llm })
     } catch (e) {
-      if (e instanceof ThrottledError || e instanceof NotConnectedError) {
+      try {
+        skipUnlessFatal(e)
+      } catch {
         retry.push(...queue.slice(i))
         save()
         throw e
       }
       if (isTransient(e)) retry.push(id)
-      console.error('[ingestion]', e)
     }
   }
   save()
