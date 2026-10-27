@@ -16,6 +16,7 @@ const pr = (over: object = {}) => ({
 
 function setup() {
   const deps = fakeDeps()
+  deps.settings.github.repositories = ['acme/app']
   const ctx = connectedCtx(deps, grantFor('github', ME))
   const ingested = () => deps.sink.ingest.mock.calls.map(([s]) => s.trigger)
   return { deps, ctx, ingested }
@@ -34,6 +35,13 @@ describe('githubWebhook', () => {
   it('ignores team review requests', async () => {
     const { ctx, ingested } = setup()
     await githubWebhook(ctx, 'pull_request', { action: 'review_requested', repository, pull_request: pr({ user: { login: 'ana' } }), requested_team: { slug: 'core' } })
+    expect(ingested()).toEqual([])
+  })
+
+  it('creates nothing when no repository is selected', async () => {
+    const { ctx, ingested, deps } = setup()
+    deps.settings.github.repositories = []
+    await githubWebhook(ctx, 'pull_request', { action: 'review_requested', repository, pull_request: pr({ user: { login: 'ana' } }), requested_reviewer: { login: 'lucas' } })
     expect(ingested()).toEqual([])
   })
 

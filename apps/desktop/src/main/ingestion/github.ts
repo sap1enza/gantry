@@ -102,7 +102,7 @@ const severityAtLeast = (severity: string | undefined, min: Settings['github']['
 
 function repoFilter(settings: Settings, repo: string | undefined) {
   const selected = settings.github.repositories
-  if (!repo || !selected.length || selected.some((r) => r.toLowerCase() === repo.toLowerCase())) return undefined
+  if (!repo || selected.some((r) => r.toLowerCase() === repo.toLowerCase())) return undefined
   return `Repository ${repo} is not selected`
 }
 
