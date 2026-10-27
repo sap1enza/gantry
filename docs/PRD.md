@@ -302,6 +302,6 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 ---
 
-## 15. Open items
+## 15. Deep links
 
-- Deep link `gantry://actionable/<id>` registration in Electron.
+`gantry://actionable/<id>` opens the card. Electron registers the scheme in Info.plist and handles both the running-app event and the cold-launch URL. Used by API responses and notifications.
