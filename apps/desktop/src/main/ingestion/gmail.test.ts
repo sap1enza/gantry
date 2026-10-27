@@ -23,6 +23,7 @@ describe('emailFilter', () => {
     expect(emailFilter(msg(['INBOX']), f, none)).toBe('Already read')
     expect(emailFilter(msg(['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS']), f, none)).toBe('Category promotions is excluded')
     expect(emailFilter(msg(['SENT']), { ...f, inboxOnly: false, unreadOnly: false }, none)).toBe('Sent by you')
+    expect(emailFilter(msg(['SPAM', 'UNREAD']), { ...f, inboxOnly: false }, none)).toBe('Spam or trash')
   })
 
   it('applies domain allow/deny including subdomains', () => {

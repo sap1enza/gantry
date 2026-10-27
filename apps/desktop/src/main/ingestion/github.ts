@@ -1,5 +1,5 @@
 import type { IngestSignal, Settings, TriggerId } from '@gantry/shared'
-import type { Ctx, EmitOptions } from './context'
+import { HttpError, skipUnlessFatal, type Ctx, type EmitOptions } from './context'
 
 const API = 'https://api.github.com'
 const SOURCE = { kind: 'github', name: 'GitHub' } as const
@@ -19,6 +19,7 @@ interface PullRequest {
   number: number
   title: string
   state?: string
+  merged?: boolean
   user: User
   mergeable?: boolean | null
   base?: { repo: Repo }
@@ -139,7 +140,7 @@ export async function githubWebhook(ctx: Ctx, event: string, p: WebhookPayload) 
     case 'pull_request': {
       const pr = p.pull_request!
       if (p.action === 'closed') {
-        for (const t of PR_TRIGGERS) resolve(ctx, t, pr.html_url, pr.state === 'closed' ? 'Pull request closed' : 'Pull request merged')
+        for (const t of PR_TRIGGERS) resolve(ctx, t, pr.html_url, pr.merged ? 'Pull request merged' : 'Pull request closed')
         return
       }
       if (p.action === 'review_requested') {
@@ -304,16 +305,30 @@ export async function reconcileGithub(ctx: Ctx) {
   })
   const current = currentFromSearch(ctx, data, prev)
   if (ctx.triggerOn('github.dependabot')) {
-    const alerts = (current['github.dependabot'] = new Map())
-    const severities = SEVERITY.slice(SEVERITY.indexOf(settings.github.dependabotMinSeverity)).join(',')
-    const repos = settings.github.repositories.length ? settings.github.repositories : (await githubRepositories(ctx)).map((r) => r.fullName)
-    for (const fullName of repos) {
-      for (const a of await gh<Alert[]>(ctx, `/repos/${fullName}/dependabot/alerts?state=open&per_page=100&severity=${severities}`).catch(() => [])) {
-        alerts.set(a.html_url, alertSignal(ctx, a, fullName))
-      }
+    try {
+      current['github.dependabot'] = await openAlerts(ctx, settings)
+    } catch (e) {
+      skipUnlessFatal(e)
     }
   }
   await applyReconciliation(ctx, current, prev)
+}
+
+async function openAlerts(ctx: Ctx, settings: Settings) {
+  const alerts = new Map<string, IngestSignal>()
+  const severities = SEVERITY.slice(SEVERITY.indexOf(settings.github.dependabotMinSeverity)).join(',')
+  // shortcut: lists every accessible repo per reconcile when none are selected, cache the list if users hit rate limits
+  const repos = settings.github.repositories.length ? settings.github.repositories : (await githubRepositories(ctx)).map((r) => r.fullName)
+  for (const fullName of repos) {
+    const page = await gh<Alert[]>(ctx, `/repos/${fullName}/dependabot/alerts?state=open&per_page=100&severity=${severities}`).catch((e) => {
+      if (e instanceof HttpError && (e.status === 403 || e.status === 404)) return []
+      throw e
+    })
+    // shortcut: no pagination; a full page skips this round's alert diff so unseen alerts are never resolved
+    if (page.length === 100) throw new Error(`more than 100 open Dependabot alerts in ${fullName}`)
+    for (const a of page) alerts.set(a.html_url, alertSignal(ctx, a, fullName))
+  }
+  return alerts
 }
 
 export async function githubRepositories(ctx: Ctx) {

@@ -41,6 +41,15 @@ describe('pollInbox', () => {
     expect(failures.get('2')).toBe(1)
   })
 
+  it('skips a throttled item without blocking the rest', async () => {
+    const throttled: InboxItem = { id: 'gh', receivedAt: '', payload: { kind: 'github.webhook', event: 'check_suite', deliveryId: 'd', payload: { action: 'completed', check_suite: { conclusion: 'failure', pull_requests: [{ url: 'https://api.github.com/repos/a/b/pulls/1' }] } } } }
+    const worker = workerWith([throttled, create('2', 'a')])
+    const deps = fakeDeps(worker)
+    routeFetch([['api.github.com', () => res({}, 429, { 'retry-after': '60' })]])
+    await pollInbox(connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' })), new Map())
+    expect(worker.ack).toHaveBeenCalledWith(['2'])
+  })
+
   it('drops a poison item after repeated failures so the queue keeps moving', async () => {
     const worker = workerWith([create('2', 'boom'), create('3', 'c')])
     const deps = fakeDeps(worker)
@@ -74,6 +83,14 @@ describe('tokens and rate limits', () => {
     const fetch = routeFetch([['/user', (init) => ((init?.headers as Record<string, string>).authorization === 'Bearer new' ? res({ ok: 1 }) : res({}, 401))]])
     expect(await ctx.json('github', 'https://api.github.com/user')).toEqual({ ok: 1 })
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares one in-flight refresh between concurrent callers', async () => {
+    const worker = workerWith([])
+    worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'lucas' }, 'new'))
+    const ctx = createCtx(fakeDeps(worker))
+    await Promise.all([ctx.refresh('github'), ctx.refresh('github')])
+    expect(worker.refreshGrant).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes before expiry', async () => {

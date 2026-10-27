@@ -1,5 +1,5 @@
 import type { IngestSignal, Settings } from '@gantry/shared'
-import { HttpError, type Ctx } from './context'
+import { HttpError, skipUnlessFatal, type Ctx } from './context'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const NEEDS_ACTION_INSTRUCTION =
@@ -33,6 +33,7 @@ const domainMatches = (domain: string, entry: string) => {
 export function emailFilter(m: GmailMessage, f: Settings['email'], labelNames: Map<string, string>) {
   const labels = m.labelIds ?? []
   if (labels.includes('SENT') || labels.includes('DRAFT')) return 'Sent by you'
+  if (labels.includes('SPAM') || labels.includes('TRASH')) return 'Spam or trash'
   if (f.inboxOnly && !labels.includes('INBOX')) return 'Not in inbox'
   if (f.unreadOnly && !labels.includes('UNREAD')) return 'Already read'
   const category = f.excludeCategories.find((c) => labels.includes(`CATEGORY_${c.toUpperCase()}`))
@@ -100,15 +101,19 @@ export async function pollGmail(ctx: Ctx) {
   }
   const seenThreads = new Set<string>()
   for (const id of [...new Set(ids)]) {
-    const m = await gmail<GmailMessage>(ctx, `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`).catch((e) => {
-      if (e instanceof HttpError && e.status === 404) return undefined
-      throw e
-    })
-    if (!m || seenThreads.has(m.threadId)) continue
-    seenThreads.add(m.threadId)
-    const filtered = emailFilter(m, f, labelNames)
-    const llm = f.llmGate ? { instruction: NEEDS_ACTION_INSTRUCTION, content: `From: ${header(m, 'From')}\nSubject: ${header(m, 'Subject')}\n\n${m.snippet ?? ''}` } : undefined
-    await ctx.emit(emailSignal(ctx, m), { filtered, llm })
+    try {
+      const m = await gmail<GmailMessage>(ctx, `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`).catch((e) => {
+        if (e instanceof HttpError && e.status === 404) return undefined
+        throw e
+      })
+      if (!m || seenThreads.has(m.threadId)) continue
+      seenThreads.add(m.threadId)
+      const filtered = emailFilter(m, f, labelNames)
+      const llm = f.llmGate ? { instruction: NEEDS_ACTION_INSTRUCTION, content: `From: ${header(m, 'From')}\nSubject: ${header(m, 'Subject')}\n\n${m.snippet ?? ''}` } : undefined
+      await ctx.emit(emailSignal(ctx, m), { filtered, llm })
+    } catch (e) {
+      skipUnlessFatal(e)
+    }
   }
   ctx.deps.kv.set('gmail.historyId', historyId)
 }

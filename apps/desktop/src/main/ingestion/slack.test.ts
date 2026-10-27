@@ -15,7 +15,8 @@ const message = (over: object = {}) => ({ type: 'message', channel: 'C1', channe
 afterEach(() => vi.unstubAllGlobals())
 
 describe('isMention', () => {
-  it('detects my id, and @here/@channel only in DMs', () => {
+  it('detects my id, any direct message, and @here/@channel only in DMs', () => {
+    expect(isMention({ text: 'can you review?', channel_type: 'im' }, 'U1')).toBe(true)
     expect(isMention({ text: 'ping <@U1>' }, 'U1')).toBe(true)
     expect(isMention({ text: 'ping <@U9>' }, 'U1')).toBe(false)
     expect(isMention({ text: '<!here> deploy', channel_type: 'im' }, 'U1')).toBe(true)

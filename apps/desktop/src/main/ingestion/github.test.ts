@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyReconciliation, apiUrlFor, currentFromSearch, githubWebhook, mentions } from './github'
+import { applyReconciliation, apiUrlFor, currentFromSearch, githubWebhook, mentions, reconcileGithub } from './github'
 import { connectedCtx, fakeDeps, grantFor, res, routeFetch } from './testing'
 
 const ME = { id: '1', login: 'lucas' }
@@ -117,8 +117,8 @@ describe('githubWebhook', () => {
   it('resolves every active trigger when the PR closes', async () => {
     const { ctx, deps } = setup()
     deps.kv.set('github.active', { 'github.ci_failed': [pr().html_url], 'github.merge_conflict': ['other'] })
-    await githubWebhook(ctx, 'pull_request', { action: 'closed', repository, pull_request: pr({ state: 'closed' }) })
-    expect(deps.sink.resolve.mock.calls.map(([r]) => r.trigger)).toEqual(['github.ci_failed'])
+    await githubWebhook(ctx, 'pull_request', { action: 'closed', repository, pull_request: pr({ state: 'closed', merged: true }) })
+    expect(deps.sink.resolve.mock.calls.map(([r]) => [r.trigger, r.reason])).toEqual([['github.ci_failed', 'Pull request merged']])
   })
 })
 
@@ -152,6 +152,22 @@ describe('reconciliation', () => {
     expect(deps.sink.ingest.mock.calls[0]![0].externalKey).toBe('C')
     expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.ci_failed', externalKey: 'B', reason: 'Checks passing or pull request closed' })
     expect(deps.kv.get('github.active')).toEqual({ 'github.ci_failed': ['A', 'C'] })
+  })
+})
+
+describe('reconcileGithub', () => {
+  it('keeps dependabot alerts active when fetching them fails', async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = ['acme/app']
+    deps.kv.set('github.active', { 'github.dependabot': ['https://github.com/acme/app/security/dependabot/1'] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const empty = { nodes: [] }
+    routeFetch([
+      ['/graphql', () => res({ data: { authored: empty, review: empty, issues: empty } })],
+      ['/dependabot/alerts', () => res({}, 500)],
+    ])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
   })
 })
 

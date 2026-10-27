@@ -35,12 +35,17 @@ export class HttpError extends Error {
 
 export class NotConnectedError extends Error {}
 
+export function skipUnlessFatal(e: unknown) {
+  if (e instanceof ThrottledError || e instanceof NotConnectedError) throw e
+  console.error('[ingestion]', e)
+}
+
 const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'token_expired', 'token_revoked', 'not_authed'])
 const REFRESH_MARGIN_MS = 5 * 60_000
 
 export function backoffUntil(res: Response, now: number): number | undefined {
   const retryAfter = res.headers.get('retry-after')
-  if (retryAfter && (res.status === 429 || res.status === 403)) return now + Number(retryAfter) * 1000
+  if (retryAfter && Number.isFinite(Number(retryAfter)) && (res.status === 429 || res.status === 403)) return now + Number(retryAfter) * 1000
   const remaining = res.headers.get('x-ratelimit-remaining')
   const reset = res.headers.get('x-ratelimit-reset')
   const limit = Number(res.headers.get('x-ratelimit-limit') ?? 5000)
@@ -59,6 +64,7 @@ export type Ctx = ReturnType<typeof createCtx>
 export function createCtx(deps: IngestionDeps) {
   const listeners = new Set<() => void>()
   const blocked = new Map<OAuthProvider, number>()
+  const refreshing = new Map<OAuthProvider, Promise<GrantTokenResponse>>()
   const now = () => (deps.now?.() ?? new Date()).getTime()
   const settings = (): Settings => deps.getSettings()
 
@@ -84,7 +90,13 @@ export function createCtx(deps: IngestionDeps) {
     setConnection(g.provider, { status: 'connected', account: { login, name, team, avatarUrl }, detail: undefined })
   }
 
-  async function refresh(p: OAuthProvider): Promise<GrantTokenResponse> {
+  function refresh(p: OAuthProvider): Promise<GrantTokenResponse> {
+    const inFlight = refreshing.get(p) ?? refreshOnce(p).finally(() => refreshing.delete(p))
+    refreshing.set(p, inFlight)
+    return inFlight
+  }
+
+  async function refreshOnce(p: OAuthProvider): Promise<GrantTokenResponse> {
     const worker = deps.worker()
     if (!worker) throw new NotConnectedError('device not registered')
     try {

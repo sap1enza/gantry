@@ -73,13 +73,19 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem) {
         await ctx.refresh(p.provider)
         return
       }
-      if (p.status === 'disconnected') ctx.deps.secrets.delete(SECRET_KEYS.grant(p.provider))
+      if (p.status === 'disconnected') return forget(ctx, p.provider)
       return ctx.setConnection(p.provider, { status: p.status })
     case 'github.webhook':
       return githubWebhook(ctx, p.event, p.payload as Parameters<typeof githubWebhook>[2])
     case 'slack.event':
       return slackEvent(ctx, p.payload as Parameters<typeof slackEvent>[1])
   }
+}
+
+function forget(ctx: Ctx, provider: OAuthProvider) {
+  ctx.deps.secrets.delete(SECRET_KEYS.grant(provider))
+  for (const key of PROVIDER_KV[provider]) ctx.deps.kv.delete(key)
+  ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
 }
 
 function contextFor(ctx: Ctx, a: Actionable) {
@@ -100,7 +106,8 @@ export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
       await handleInboxItem(ctx, item)
       failures.delete(item.id)
     } catch (e) {
-      const attempts = (failures.get(item.id) ?? 0) + (e instanceof ThrottledError ? 0 : 1)
+      if (e instanceof ThrottledError) continue
+      const attempts = (failures.get(item.id) ?? 0) + 1
       if (attempts < MAX_ITEM_ATTEMPTS) {
         failures.set(item.id, attempts)
         report(e)
@@ -161,10 +168,8 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
       await deps.openExternal(await worker.oauthStartUrl(provider))
     },
     async disconnect(provider) {
-      await deps.worker()?.revokeGrant(provider)
-      deps.secrets.delete(SECRET_KEYS.grant(provider))
-      for (const key of PROVIDER_KV[provider]) deps.kv.delete(key)
-      ctx.setConnection(provider, { status: 'disconnected', account: undefined, detail: undefined })
+      await deps.worker()?.revokeGrant(provider).catch(report)
+      forget(ctx, provider)
     },
     manageAccessUrl: (provider) => MANAGE_ACCESS[provider],
     githubRepositories: () => githubRepositories(ctx),
