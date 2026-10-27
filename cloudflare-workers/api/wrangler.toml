@@ -1,5 +1,7 @@
 name = "gantry-api"
 main = "src/index.ts"
+workers_dev = true
+preview_urls = false
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
 
@@ -13,7 +15,7 @@ migrations_dir = "migrations"
 crons = ["17 * * * *"]
 
 [vars]
-PUBLIC_URL = "http://localhost:8787"
+PUBLIC_URL = "https://gantry-api.sapienzalucas.workers.dev"
 EMAIL_FROM = "Gantry <login@gantry.dev>"
 GITHUB_CLIENT_ID = ""
 SLACK_CLIENT_ID = ""
