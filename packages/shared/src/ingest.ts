@@ -3,6 +3,7 @@ import type { ReceivedOutcome } from './events'
 import type { TriggerId } from './triggers'
 
 export interface IngestSignal {
+  id?: string
   trigger: TriggerId
   source: ActionableSource
   externalKey: string
