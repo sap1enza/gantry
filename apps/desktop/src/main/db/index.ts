@@ -21,11 +21,24 @@ const MIGRATIONS = [
   CREATE INDEX events_created ON events (created_at);
   CREATE TABLE repositories (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, remote TEXT NOT NULL, default_branch TEXT NOT NULL, setup_command TEXT);
   `,
+  `
+  ALTER TABLE actionables ADD COLUMN board_column TEXT GENERATED ALWAYS AS (json_extract(data, '$.column')) VIRTUAL;
+  ALTER TABLE actionables ADD COLUMN archived_at TEXT GENERATED ALWAYS AS (json_extract(data, '$.archivedAt')) VIRTUAL;
+  ALTER TABLE actionables ADD COLUMN dismissed_at TEXT GENERATED ALWAYS AS (json_extract(data, '$.dismissedAt')) VIRTUAL;
+  ALTER TABLE actionables ADD COLUMN snoozed_until TEXT GENERATED ALWAYS AS (json_extract(data, '$.snoozedUntil')) VIRTUAL;
+  ALTER TABLE actionables ADD COLUMN agent_state TEXT GENERATED ALWAYS AS (json_extract(data, '$.agentState')) VIRTUAL;
+  CREATE INDEX actionables_column ON actionables (board_column);
+  CREATE INDEX actionables_archived ON actionables (archived_at);
+  CREATE INDEX actionables_dismissed ON actionables (dismissed_at);
+  CREATE INDEX actionables_snoozed ON actionables (snoozed_until);
+  CREATE INDEX actionables_agent_state ON actionables (agent_state);
+  `,
 ]
 
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL')
+  db.exec('PRAGMA synchronous = NORMAL')
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number }
   MIGRATIONS.slice(version).forEach((sql, i) => {
     db.exec('BEGIN')
