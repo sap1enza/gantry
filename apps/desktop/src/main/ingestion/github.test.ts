@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyReconciliation, apiUrlFor, currentFromSearch, githubWebhook, mentions, reconcileGithub } from './github'
+import { applyReconciliation, apiUrlFor, currentFromSearch, githubRepositories, githubWebhook, mentionResolution, mentions, nextLink, reconcileGithub } from './github'
 import { connectedCtx, fakeDeps, grantFor, res, routeFetch } from './testing'
 
 const ME = { id: '1', login: 'lucas' }
@@ -122,6 +122,11 @@ describe('githubWebhook', () => {
   })
 })
 
+const s = (key: string) => ({ trigger: 'github.ci_failed' as const, source: { kind: 'github' as const, name: 'GitHub' }, externalKey: key, title: key, occurredAt: '' })
+const searchPage = (nodes: object[], issueCount = nodes.length, endCursor: string | null = null) => ({ data: { search: { issueCount, pageInfo: { hasNextPage: !!endCursor, endCursor }, nodes } } })
+const emptySearch = () => res(searchPage([]))
+const linked = (body: unknown, next?: string) => res(body, 200, next ? { link: `<${next}>; rel="next", <https://x/last>; rel="last"` } : {})
+
 describe('reconciliation', () => {
   const node = (n: number, over: object = {}) => ({ url: `https://github.com/acme/app/pull/${n}`, number: n, title: `PR ${n}`, repository: { nameWithOwner: 'acme/app' }, ...over })
   const rollup = (state: string) => ({ commits: { nodes: [{ commit: { statusCheckRollup: { state } } }] } })
@@ -131,47 +136,192 @@ describe('reconciliation', () => {
     const current = currentFromSearch(
       ctx,
       {
-        authored: { nodes: [node(1, rollup('FAILURE')), node(2, rollup('PENDING')), node(3, { ...rollup('PENDING'), mergeable: 'CONFLICTING' }), node(4, { reviewDecision: 'CHANGES_REQUESTED' })] },
-        review: { nodes: [node(5)] },
-        issues: { nodes: [] },
+        authored: { complete: true, nodes: [node(1, rollup('FAILURE')), node(2, rollup('PENDING')), node(3, { ...rollup('PENDING'), mergeable: 'CONFLICTING' }), node(4, { reviewDecision: 'CHANGES_REQUESTED' })] },
+        review: { complete: true, nodes: [node(5)] },
+        issues: { complete: true, nodes: [] },
       },
       { 'github.ci_failed': [node(2).url] },
     )
-    expect([...current['github.ci_failed']!.keys()]).toEqual([node(1).url, node(2).url])
-    expect([...current['github.merge_conflict']!.keys()]).toEqual([node(3).url])
-    expect([...current['github.changes_requested']!.keys()]).toEqual([node(4).url])
-    expect([...current['github.review_requested']!.keys()]).toEqual([node(5).url])
+    expect([...current['github.ci_failed']!.signals.keys()]).toEqual([node(1).url, node(2).url])
+    expect([...current['github.merge_conflict']!.signals.keys()]).toEqual([node(3).url])
+    expect([...current['github.changes_requested']!.signals.keys()]).toEqual([node(4).url])
+    expect([...current['github.review_requested']!.signals.keys()]).toEqual([node(5).url])
+    expect(current['github.issue']!.signals.size).toBe(0)
   })
 
   it('backfills new entities and resolves ones that no longer match', async () => {
     const { ctx, deps, ingested } = setup()
     deps.kv.set('github.active', { 'github.ci_failed': ['A', 'B'] })
-    const s = (key: string) => ({ trigger: 'github.ci_failed' as const, source: { kind: 'github' as const, name: 'GitHub' }, externalKey: key, title: key, occurredAt: '' })
-    await applyReconciliation(ctx, { 'github.ci_failed': new Map([['A', s('A')], ['C', s('C')]]) })
+    await applyReconciliation(ctx, { 'github.ci_failed': { complete: true, signals: new Map([['A', s('A')], ['C', s('C')]]) } })
     expect(ingested()).toEqual(['github.ci_failed'])
     expect(deps.sink.ingest.mock.calls[0]![0].externalKey).toBe('C')
     expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.ci_failed', externalKey: 'B', reason: 'Checks passing or pull request closed' })
     expect(deps.kv.get('github.active')).toEqual({ 'github.ci_failed': ['A', 'C'] })
   })
+
+  it('never resolves from a truncated result, only backfills', async () => {
+    const { ctx, deps, ingested } = setup()
+    deps.kv.set('github.active', { 'github.ci_failed': ['A', 'B'] })
+    await applyReconciliation(ctx, { 'github.ci_failed': { complete: false, signals: new Map([['C', s('C')]]) } })
+    expect(ingested()).toEqual(['github.ci_failed'])
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
+    expect(deps.kv.get('github.active')).toEqual({ 'github.ci_failed': ['A', 'B', 'C'] })
+  })
 })
 
 describe('reconcileGithub', () => {
+  const alertUrl = (n: number) => `https://github.com/acme/app/security/dependabot/${n}`
+  const alert = (n: number) => ({ html_url: alertUrl(n), number: n, security_advisory: { severity: 'high', summary: `vuln ${n}` } })
+
   it('keeps dependabot alerts active when fetching them fails', async () => {
     const { ctx, deps } = setup()
     deps.settings.github.repositories = ['acme/app']
-    deps.kv.set('github.active', { 'github.dependabot': ['https://github.com/acme/app/security/dependabot/1'] })
+    deps.kv.set('github.active', { 'github.dependabot': [alertUrl(1)] })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const empty = { nodes: [] }
     routeFetch([
-      ['/graphql', () => res({ data: { authored: empty, review: empty, issues: empty } })],
+      ['/graphql', emptySearch],
       ['/dependabot/alerts', () => res({}, 500)],
     ])
     await reconcileGithub(ctx)
     expect(deps.sink.resolve).not.toHaveBeenCalled()
   })
+
+  it('follows dependabot pagination before resolving', async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = ['acme/app']
+    deps.kv.set('github.active', { 'github.dependabot': [alertUrl(1), alertUrl(2), alertUrl(3)] })
+    routeFetch([
+      ['/graphql', emptySearch],
+      ['after=c2', () => linked([alert(2)])],
+      ['/dependabot/alerts', () => linked([alert(1)], 'https://api.github.com/repos/acme/app/dependabot/alerts?after=c2')],
+    ])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve.mock.calls.map(([r]) => r.externalKey)).toEqual([alertUrl(3)])
+  })
+
+  it('stops paging when rate limited and resolves nothing', async () => {
+    const { ctx, deps } = setup()
+    deps.settings.github.repositories = ['acme/app']
+    deps.kv.set('github.active', { 'github.dependabot': [alertUrl(3)] })
+    const fetch = routeFetch([
+      ['/graphql', emptySearch],
+      ['after=c2', () => linked([alert(2)])],
+      ['/dependabot/alerts', () => res([alert(1)], 200, { link: '<https://api.github.com/repos/acme/app/dependabot/alerts?after=c2>; rel="next"', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1900000000' })],
+    ])
+    await expect(reconcileGithub(ctx)).rejects.toThrow('throttled')
+    expect(fetch.mock.calls.some(([u]) => String(u).includes('after=c2'))).toBe(false)
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
+  })
+
+  it('pages GraphQL search and resolves what no longer matches', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.active', { 'github.review_requested': ['https://github.com/acme/app/pull/1', 'https://github.com/acme/app/pull/9'] })
+    const pr = (n: number) => ({ url: `https://github.com/acme/app/pull/${n}`, number: n, title: `PR ${n}`, repository: { nameWithOwner: 'acme/app' } })
+    routeFetch([
+      [
+        '/graphql',
+        (init) => {
+          const { variables } = JSON.parse(String(init!.body)) as { variables: { q: string; after: string | null } }
+          if (!variables.q.includes('review-requested')) return emptySearch()
+          return res(variables.after ? searchPage([pr(2)], 2) : searchPage([pr(1)], 2, 'p2'))
+        },
+      ],
+    ])
+    await reconcileGithub(ctx)
+    expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual([pr(2).url])
+    expect(deps.sink.resolve.mock.calls.map(([r]) => r.externalKey)).toEqual([pr(9).url])
+  })
+
+  it('does not resolve when search hits the result cap', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.active', { 'github.review_requested': ['https://github.com/acme/app/pull/9'] })
+    routeFetch([['/graphql', () => res(searchPage([], 1500))]])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve).not.toHaveBeenCalled()
+  })
+
+  it("covers open issues in selected repositories when scope is 'all' and resolves closed ones", async () => {
+    const { ctx, deps, ingested } = setup()
+    deps.settings.github.repositories = ['acme/app']
+    deps.settings.github.issuesScope = 'all'
+    deps.settings.triggers = { ...deps.settings.triggers, 'github.issue': true, 'github.dependabot': false }
+    deps.kv.set('github.active', { 'github.issue': ['https://github.com/acme/app/issues/1'] })
+    const fetch = routeFetch([
+      ['/graphql', emptySearch],
+      [
+        '/repos/acme/app/issues?',
+        () => res([{ html_url: 'https://github.com/acme/app/issues/2', number: 2, title: 'Open', user: { login: 'ana' } }, { html_url: 'https://github.com/acme/app/pull/3', number: 3, title: 'PR', pull_request: {} }]),
+      ],
+    ])
+    await reconcileGithub(ctx)
+    expect(ingested()).toEqual(['github.issue'])
+    expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ externalKey: 'https://github.com/acme/app/issues/2', actor: 'ana' })
+    expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.issue', externalKey: 'https://github.com/acme/app/issues/1', reason: 'Issue closed' })
+    expect(fetch.mock.calls.filter(([, init]) => String(init?.body ?? '').includes('assignee:'))).toHaveLength(0)
+  })
+
+  it('resolves active mentions from thread state', async () => {
+    const { ctx, deps } = setup()
+    const closed = 'https://github.com/acme/app/issues/5'
+    deps.kv.set('github.active', { 'github.mention': [closed, 'https://github.com/acme/app/pull/7'] })
+    routeFetch([
+      ['/graphql', emptySearch],
+      ['/issues/5', () => res({ state: 'closed' })],
+      ['/issues/7/comments', () => res([{ user: { login: 'ana' }, body: '@lucas ?', created_at: '2026-10-27T10:00:00Z' }])],
+      ['/issues/7', () => res({ state: 'open' })],
+      ['/pulls/7/comments', () => res([])],
+      ['/pulls/7/reviews', () => res([{ user: { login: 'Lucas' }, body: 'done', submitted_at: '2026-10-27T11:00:00Z' }])],
+    ])
+    await reconcileGithub(ctx)
+    expect(deps.sink.resolve.mock.calls.map(([r]) => [r.externalKey, r.reason])).toEqual([
+      [closed, 'Issue closed'],
+      ['https://github.com/acme/app/pull/7', 'Replied'],
+    ])
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.mention': [] })
+  })
+})
+
+describe('mentionResolution', () => {
+  const thread = 'https://github.com/acme/app/issues/3'
+  const comments = (...items: object[]) =>
+    routeFetch([
+      ['/issues/3/comments', () => res(items)],
+      ['/issues/3', () => res({ state: 'open' })],
+    ])
+
+  it('ignores my replies that came before the latest mention', async () => {
+    const { ctx } = setup()
+    comments({ user: { login: 'lucas' }, body: 'hi', created_at: '2026-10-27T09:00:00Z' }, { user: { login: 'ana' }, body: 'ping @lucas', created_at: '2026-10-27T10:00:00Z' })
+    expect(await mentionResolution(ctx, 'lucas', thread)).toBeUndefined()
+  })
+
+  it('keeps the card when the mention is no longer visible', async () => {
+    const { ctx } = setup()
+    comments({ user: { login: 'lucas' }, body: 'hi', created_at: '2026-10-27T09:00:00Z' })
+    expect(await mentionResolution(ctx, 'lucas', thread)).toBeUndefined()
+  })
+})
+
+describe('githubRepositories', () => {
+  it('pages installations and their repositories', async () => {
+    const { ctx } = setup()
+    routeFetch([
+      ['installations?page=2', () => res({ installations: [{ id: 2 }] })],
+      ['/user/installations?', () => linked({ installations: [{ id: 1 }] }, 'https://api.github.com/user/installations?page=2')],
+      ['/installations/1/repositories?page=2', () => res({ repositories: [{ full_name: 'acme/b' }] })],
+      ['/installations/1/repositories', () => linked({ repositories: [{ full_name: 'acme/a' }] }, 'https://api.github.com/user/installations/1/repositories?page=2')],
+      ['/installations/2/repositories', () => res({ repositories: [{ full_name: 'beta/c' }] })],
+    ])
+    expect((await githubRepositories(ctx)).map((r) => r.fullName)).toEqual(['acme/a', 'acme/b', 'beta/c'])
+  })
 })
 
 describe('helpers', () => {
+  it('reads the next page from a Link header', () => {
+    expect(nextLink(new Headers({ link: '<https://a/1?page=2>; rel="next", <https://a/1?page=5>; rel="last"' }))).toBe('https://a/1?page=2')
+    expect(nextLink(new Headers({ link: '<https://a/1?page=1>; rel="prev"' }))).toBeUndefined()
+  })
+
   it('matches @login only as a whole handle', () => {
     expect(mentions('hey @Lucas, look', 'lucas')).toBe(true)
     expect(mentions('@lucas-bot ran', 'lucas')).toBe(false)
