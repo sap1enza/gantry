@@ -1,5 +1,5 @@
 import type { IngestSignal, Settings } from '@gantry/shared'
-import { HttpError, skipUnlessFatal, type Ctx } from './context'
+import { HttpError, isTransient, skipUnlessFatal, type Ctx } from './context'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const NEEDS_ACTION_INSTRUCTION =
@@ -93,14 +93,20 @@ async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: stri
 export async function pollGmail(ctx: Ctx) {
   if (!ctx.account('google')) return
   const { ids, historyId } = await newMessageIds(ctx)
+  const queue = [...new Set([...(ctx.deps.kv.get<string[]>('gmail.retry') ?? []), ...ids])]
+  const retry: string[] = []
+  const save = () => {
+    ctx.deps.kv.set('gmail.retry', retry)
+    ctx.deps.kv.set('gmail.historyId', historyId)
+  }
   const f = ctx.settings().email
   const labelNames = new Map<string, string>()
-  if (f.labels.length && ids.length) {
+  if (f.labels.length && queue.length) {
     const { labels } = await gmail<{ labels: { id: string; name: string }[] }>(ctx, '/labels')
     for (const l of labels) labelNames.set(l.id, l.name)
   }
   const seenThreads = new Set<string>()
-  for (const id of [...new Set(ids)]) {
+  for (const [i, id] of queue.entries()) {
     try {
       const m = await gmail<GmailMessage>(ctx, `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`).catch((e) => {
         if (e instanceof HttpError && e.status === 404) return undefined
@@ -112,10 +118,17 @@ export async function pollGmail(ctx: Ctx) {
       const llm = f.llmGate ? { instruction: NEEDS_ACTION_INSTRUCTION, content: `From: ${header(m, 'From')}\nSubject: ${header(m, 'Subject')}\n\n${m.snippet ?? ''}` } : undefined
       await ctx.emit(emailSignal(ctx, m), { filtered, llm })
     } catch (e) {
-      skipUnlessFatal(e)
+      try {
+        skipUnlessFatal(e)
+      } catch {
+        retry.push(...queue.slice(i))
+        save()
+        throw e
+      }
+      if (isTransient(e)) retry.push(id)
     }
   }
-  ctx.deps.kv.set('gmail.historyId', historyId)
+  save()
 }
 
 const decode = (data: string) => Buffer.from(data, 'base64url').toString('utf8')

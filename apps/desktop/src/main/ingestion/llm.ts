@@ -5,7 +5,14 @@ export interface Verdict {
   reason: string
 }
 
+export class LlmError extends Error {
+  constructor(readonly status: number) {
+    super(`LLM request failed: HTTP ${status}`)
+  }
+}
+
 const MAX_CONTENT = 12_000
+const LLM_TIMEOUT_MS = 45_000
 const FORMAT = 'Respond with only a JSON object: {"decision": true or false, "reason": "<one short sentence>"}.'
 
 export async function classify(
@@ -31,8 +38,12 @@ export function parseVerdict(text: string): Verdict {
 }
 
 async function post(url: string, headers: Record<string, string>, body: unknown) {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
-  if (!res.ok) throw new Error(`LLM request failed: HTTP ${res.status}`)
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+  })
+  if (!res.ok) throw new LlmError(res.status)
   return res.json()
 }
 

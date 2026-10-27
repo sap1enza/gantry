@@ -13,7 +13,7 @@ import {
   type TriggerId,
 } from '@gantry/shared'
 import type { IngestionDeps } from '../contracts'
-import { classify } from './llm'
+import { classify, LlmError } from './llm'
 
 export class ThrottledError extends Error {
   constructor(
@@ -35,6 +35,22 @@ export class HttpError extends Error {
 
 export class NotConnectedError extends Error {}
 
+export const FETCH_TIMEOUT_MS = 20_000
+
+export function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DOMException(`Timed out after ${ms} ms`, 'TimeoutError')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+export function isTransient(e: unknown) {
+  const status = (e as { status?: unknown })?.status
+  if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
+  return (e instanceof TypeError && e.message === 'fetch failed') || (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError'))
+}
+
 export function skipUnlessFatal(e: unknown) {
   if (e instanceof ThrottledError || e instanceof NotConnectedError) throw e
   console.error('[ingestion]', e)
@@ -42,6 +58,11 @@ export function skipUnlessFatal(e: unknown) {
 
 const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'token_expired', 'token_revoked', 'not_authed'])
 const REFRESH_MARGIN_MS = 5 * 60_000
+const GOOGLE_RATE_LIMITS = new Set(['rateLimitExceeded', 'userRateLimitExceeded'])
+const GOOGLE_BACKOFF_MS = 60_000
+
+const googleRateLimited = (body: unknown) =>
+  ((body as { error?: { errors?: { reason?: string }[] } })?.error?.errors ?? []).some((x) => GOOGLE_RATE_LIMITS.has(x.reason ?? ''))
 
 export function backoffUntil(res: Response, now: number): number | undefined {
   const retryAfter = res.headers.get('retry-after')
@@ -101,7 +122,7 @@ export function createCtx(deps: IngestionDeps) {
     const worker = deps.worker()
     if (!worker) throw new NotConnectedError('device not registered')
     try {
-      const g = await worker.refreshGrant(p, { force })
+      const g = await withTimeout(worker.refreshGrant(p, { force }))
       storeGrant(g)
       return g
     } catch (e) {
@@ -134,11 +155,16 @@ export function createCtx(deps: IngestionDeps) {
       const res = await fetch(url, {
         ...init,
         headers: { accept: 'application/json', ...init.headers, authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       })
       const backoff = backoffUntil(res, now())
       if (backoff) block(p, backoff)
       if (backoff && !res.ok) throw new ThrottledError(p, backoff)
       const body = res.status === 204 ? undefined : await res.json().catch(() => undefined)
+      if (p === 'google' && res.status === 403 && googleRateLimited(body)) {
+        block(p, backoff ?? now() + GOOGLE_BACKOFF_MS)
+        throw new ThrottledError(p, blocked.get(p)!)
+      }
       const rejected = res.status === 401 || (p === 'slack' && SLACK_AUTH_ERRORS.has((body as { error?: string })?.error ?? ''))
       if (rejected && attempt === 0) {
         accessToken = (await refresh(p, true)).accessToken
@@ -167,7 +193,10 @@ export function createCtx(deps: IngestionDeps) {
       return
     }
     if (opts.llm) {
-      const verdict = await classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), opts.llm.instruction, opts.llm.content)
+      const verdict = await classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), opts.llm.instruction, opts.llm.content).catch((e) => {
+        if (e instanceof LlmError && !isTransient(e)) return { decision: false, reason: e.message }
+        throw e
+      })
       if (!verdict.decision) {
         deps.sink.logIgnored(signal, 'ignored:llm', verdict.reason)
         return

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyReconciliation, apiUrlFor, currentFromSearch, githubRepositories, githubWebhook, mentionResolution, mentions, nextLink, reconcileGithub } from './github'
-import { connectedCtx, fakeDeps, grantFor, res, routeFetch } from './testing'
+import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
 
 const ME = { id: '1', login: 'lucas' }
 const repository = { full_name: 'acme/app' }
@@ -131,6 +131,30 @@ describe('reconciliation', () => {
   const node = (n: number, over: object = {}) => ({ url: `https://github.com/acme/app/pull/${n}`, number: n, title: `PR ${n}`, repository: { nameWithOwner: 'acme/app' }, ...over })
   const rollup = (state: string) => ({ commits: { nodes: [{ commit: { statusCheckRollup: { state } } }] } })
 
+  it('keeps keys a webhook tracked while reconciliation was running', async () => {
+    const { ctx, deps } = setup()
+    const webhookKey = 'https://github.com/acme/app/pull/8'
+    deps.sink.ingest.mockImplementation(() => {
+      deps.kv.set('github.active', { 'github.review_requested': [webhookKey], 'github.mention': [webhookKey] })
+      return { outcome: 'created' }
+    })
+    const current = currentFromSearch(ctx, { authored: { complete: true, nodes: [] }, review: { complete: true, nodes: [node(5)] } }, {})
+    await applyReconciliation(ctx, current, {})
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.review_requested': [webhookKey, node(5).url], 'github.mention': [webhookKey] })
+  })
+
+  it('does not restore a key a webhook resolved while an incomplete reconciliation was running', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.active', { 'github.review_requested': [node(9).url] })
+    deps.sink.ingest.mockImplementation(() => {
+      deps.kv.set('github.active', { 'github.review_requested': [] })
+      return { outcome: 'created' }
+    })
+    const current = currentFromSearch(ctx, { authored: { complete: true, nodes: [] }, review: { complete: false, nodes: [node(5)] } }, {})
+    await applyReconciliation(ctx, current, { 'github.review_requested': [node(9).url] })
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.review_requested': [node(5).url] })
+  })
+
   it('maps search state to current entities, keeping pending ones that were active', () => {
     const { ctx } = setup()
     const current = currentFromSearch(
@@ -170,6 +194,30 @@ describe('reconciliation', () => {
 })
 
 describe('reconcileGithub', () => {
+  it('backfills open unreplied mentions updated since the last scan', async () => {
+    const { ctx, deps } = setup()
+    deps.kv.set('github.mentionsSince', '2026-10-27T11:50:00.000Z')
+    const issue = { url: 'https://github.com/acme/app/issues/7', number: 7, title: 'Help', repository: { nameWithOwner: 'acme/app' } }
+    const queries: string[] = []
+    routeFetch([
+      [
+        '/graphql',
+        (init) => {
+          const { q } = JSON.parse(String(init!.body)).variables as { q: string }
+          queries.push(q)
+          return res(searchPage(q.startsWith('mentions:') ? [issue] : []))
+        },
+      ],
+      ['/issues/7/comments', () => res([{ user: { login: 'ana' }, body: '@lucas thoughts?', created_at: '2026-10-27T11:55:00Z' }])],
+      ['/issues/7', () => res({ state: 'open' })],
+    ])
+    await reconcileGithub(ctx)
+    expect(queries).toContain('mentions:lucas is:open archived:false updated:>=2026-10-27T11:50:00.000Z')
+    expect(deps.sink.ingest.mock.calls.map(([x]) => [x.trigger, x.externalKey])).toEqual([['github.mention', issue.url]])
+    expect(deps.kv.get('github.active')).toMatchObject({ 'github.mention': [issue.url] })
+    expect(deps.kv.get('github.mentionsSince')).toBe('2026-10-27T12:00:00Z')
+  })
+
   const alertUrl = (n: number) => `https://github.com/acme/app/security/dependabot/${n}`
   const alert = (n: number) => ({ html_url: alertUrl(n), number: n, security_advisory: { severity: 'high', summary: `vuln ${n}` } })
 

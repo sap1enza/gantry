@@ -56,6 +56,28 @@ describe('slackEvent', () => {
     expect(deps.sink.logIgnored.mock.calls.map((c) => c[2])).toEqual(['Channel is on the deny list', 'Channel is not on the allow list'])
     expect(deps.kv.get('slack.pending')).toBeUndefined()
   })
+
+  it('matches channel ids without a lookup and skips name filters when channels:read is missing', async () => {
+    const { ctx, deps } = setup()
+    const fetch = routeFetch([['conversations.info', () => res({ ok: false, error: 'missing_scope' })]])
+    deps.settings.slack.channelDeny = ['C0DENIED1']
+    await slackEvent(ctx, { event: message({ channel: 'C0DENIED1' }) } as never)
+    expect(fetch).not.toHaveBeenCalled()
+    deps.settings.slack.channelDeny = []
+    deps.settings.slack.channelAllow = ['#eng']
+    await slackEvent(ctx, { event: message({ channel: 'C0UNKNOWN', ts: '1' }) } as never)
+    await slackEvent(ctx, { event: message({ channel: 'C0UNKNOWN', ts: '2' }) } as never)
+    expect(deps.sink.logIgnored.mock.calls.map((c) => c[2])).toEqual(['Channel is on the deny list'])
+    expect(deps.sink.ingest.mock.calls.map(([x]) => x.externalKey)).toEqual(['C0UNKNOWN:1', 'C0UNKNOWN:2'])
+    expect(deps.sink.logConnection.mock.calls.filter(([, st]) => st === 'missing_scope')).toHaveLength(1)
+  })
+
+  it('handles a retried Slack event only once', async () => {
+    const { ctx, deps } = setup()
+    await slackEvent(ctx, { event_id: 'Ev1', event: message() } as never)
+    await slackEvent(ctx, { event_id: 'Ev1', event: message() } as never)
+    expect(deps.sink.ingest).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('checkUnreplied', () => {

@@ -1,6 +1,6 @@
 import { SECRET_KEYS, type Actionable, type ConnectionInfo, type InboxItem, type OAuthProvider, type SourceKind } from '@gantry/shared'
 import type { Ingestion, IngestionDeps } from '../contracts'
-import { createCtx, NotConnectedError, ThrottledError, type Ctx } from './context'
+import { createCtx, NotConnectedError, ThrottledError, withTimeout, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
 import { emailContext, pollGmail } from './gmail'
 import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
@@ -10,9 +10,9 @@ const MAX_ITEM_ATTEMPTS = 5
 const MAX_CONTEXT = 8_000
 const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
-  github: ['github.active', 'github.issuesSince'],
-  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt'],
-  google: ['gmail.historyId'],
+  github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
+  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt', 'slack.seenEvents'],
+  google: ['gmail.historyId', 'gmail.retry'],
 }
 const SOURCE_KIND: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack', google: 'email' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
@@ -40,7 +40,9 @@ function report(e: unknown) {
   console.error('[ingestion]', e)
 }
 
-async function handleInboxItem(ctx: Ctx, item: InboxItem) {
+type Exclusive = (run: () => Promise<void>) => Promise<void>
+
+async function handleInboxItem(ctx: Ctx, item: InboxItem, exclusive: Exclusive) {
   const p = item.payload
   switch (p.kind) {
     case 'actionable.create': {
@@ -74,7 +76,7 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem) {
         await ctx.refresh(p.provider)
         return
       }
-      if (p.status === 'disconnected') return forget(ctx, p.provider)
+      if (p.status === 'disconnected') return exclusive(async () => forget(ctx, p.provider))
       return ctx.setConnection(p.provider, { status: p.status })
     case 'github.webhook':
       return githubWebhook(ctx, p.event, p.payload as Parameters<typeof githubWebhook>[2])
@@ -98,14 +100,14 @@ function contextFor(ctx: Ctx, a: Actionable) {
   return undefined
 }
 
-export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
+export async function pollInbox(ctx: Ctx, failures: Map<string, number>, exclusive: Exclusive = (run) => run()) {
   const worker = ctx.deps.worker()
   if (!worker) return
-  const { items } = await worker.inbox()
+  const { items } = await withTimeout(worker.inbox())
   const handled: string[] = []
   for (const item of items) {
     try {
-      await handleInboxItem(ctx, item)
+      await handleInboxItem(ctx, item, exclusive)
       failures.delete(item.id)
     } catch (e) {
       if (e instanceof ThrottledError) continue
@@ -120,7 +122,21 @@ export async function pollInbox(ctx: Ctx, failures: Map<string, number>) {
     }
     handled.push(item.id)
   }
-  if (handled.length) await worker.ack(handled)
+  if (handled.length) await withTimeout(worker.ack(handled))
+}
+
+export function serial() {
+  let tail: Promise<void> = Promise.resolve()
+  let waiting = false
+  return (run: () => Promise<void>, force = false) => {
+    if (waiting && !force) return tail
+    waiting = true
+    tail = tail.catch(() => {}).then(() => {
+      waiting = false
+      return run()
+    })
+    return tail
+  }
 }
 
 export function createIngestion(deps: IngestionDeps): Ingestion {
@@ -128,10 +144,10 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
   const nextRun = new Map<string, number>()
   const failures = new Map<string, number>()
   let timer: ReturnType<typeof setInterval> | undefined
-  let busy: Promise<void> = Promise.resolve()
+  const inbox = serial()
+  const jobs = serial()
 
-  async function tick(force: boolean) {
-    await pollInbox(ctx, failures).catch(report)
+  async function runJobs(force: boolean) {
     for (const job of JOBS) {
       if (!ctx.account(job.provider) || (!force && (nextRun.get(job.name) ?? 0) > ctx.now())) continue
       nextRun.set(job.name, ctx.now() + job.interval())
@@ -144,7 +160,9 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     }
   }
 
-  const schedule = (force: boolean) => (busy = busy.then(() => tick(force)))
+  async function schedule(force: boolean) {
+    await Promise.all([inbox(() => pollInbox(ctx, failures, (run) => jobs(run, true)).catch(report)), jobs(() => runJobs(force), force)])
+  }
 
   return {
     start() {
@@ -171,7 +189,7 @@ export function createIngestion(deps: IngestionDeps): Ingestion {
     },
     async disconnect(provider) {
       await deps.worker()?.revokeGrant(provider).catch(report)
-      forget(ctx, provider)
+      await jobs(async () => forget(ctx, provider), true)
     },
     manageAccessUrl: (provider) => MANAGE_ACCESS[provider],
     githubRepositories: () => githubRepositories(ctx),
