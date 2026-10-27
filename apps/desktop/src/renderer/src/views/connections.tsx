@@ -34,7 +34,7 @@ export function useBrowserAuth() {
 function FinishInBrowser({ onClose }: { onClose(): void }) {
   const app = useApp()
   const [code, setCode] = useState('')
-  const submit = async () => void ((await app.run(api.account.completeAuth(code.trim()).then(() => true))) && onClose())
+  const submit = async () => void ((await app.run(api.account.completeAuth(code.trim()).then(() => (void api.connections.syncNow().catch(() => undefined), true)))) && onClose())
   return (
     <div className="banner">
       <ExternalLink size={15} />

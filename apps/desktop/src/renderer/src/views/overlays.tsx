@@ -265,7 +265,7 @@ export function NameModal() {
   const signedIn = app.account?.signedIn
   const auth = useBrowserAuth()
   const signIn = async (method: 'github' | 'email') => {
-    if ((await auth.start(api.account.signIn(method, method === 'email' ? email : undefined))) && method === 'email') app.toast(`Magic link sent to ${email}`)
+    if ((await auth.start(api.account.setName(name.trim()).then(() => api.account.signIn(method, method === 'email' ? email : undefined)))) && method === 'email') app.toast(`Magic link sent to ${email}`)
   }
   const save = async () => {
     await app.run(api.account.setName(name.trim()))

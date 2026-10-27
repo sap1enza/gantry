@@ -38,6 +38,7 @@ export function PreferencesView() {
   const [key, setKey] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [email, setEmail] = useState('')
+  const auth = useBrowserAuth()
   const loadRepos = useCallback(async () => setRepos(await api.repos.list()), [])
   useEffect(() => {
     void loadRepos()
@@ -46,7 +47,6 @@ export function PreferencesView() {
   if (!s) return null
   const set = (patch: Partial<Settings>) => app.updateSettings(patch)
   const acc = app.account
-  const auth = useBrowserAuth()
 
   return (
     <>

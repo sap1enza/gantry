@@ -205,8 +205,12 @@ function main() {
   })
 
   readyForAuth((code) => {
-    window?.show()
-    api.account.completeAuth(code).catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
+    if (window) window.show()
+    else createWindow()
+    api.account
+      .completeAuth(code)
+      .then(() => ingestion?.syncNow())
+      .catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
   })
 
   const syncAccount = () => void account.ensureDevice().then((ok) => (ok ? account.refresh() : undefined))
