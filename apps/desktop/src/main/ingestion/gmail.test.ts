@@ -49,12 +49,14 @@ describe('pollGmail', () => {
     const fetch = routeFetch([
       ['/history?', () => res({ error: 'gone' }, 404)],
       ['/profile', () => res({ historyId: '555' })],
-      ['/messages?q=', () => res({ messages: [{ id: 'm2' }, { id: 'm1' }] })],
+      ['pageToken=p2', () => res({ messages: [{ id: 'm3' }] })],
+      ['/messages?q=', () => res({ messages: [{ id: 'm2' }, { id: 'm1' }], nextPageToken: 'p2' })],
       [/\/messages\/m\d/, () => res(msg(['INBOX', 'UNREAD']))],
     ])
     await pollGmail(ctx)
     const query = fetch.mock.calls.map(([url]) => String(url)).find((u) => u.includes('/messages?q='))!
-    expect(new URL(query).searchParams.get('q')).toBe(`after:${Math.floor((NOW.getTime() - 90_500) / 1000)}`)
+    expect(new URL(query).searchParams.get('q')).toBe(`after:${Math.floor((NOW.getTime() - 90_500) / 1000)} in:inbox`)
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/messages/m3?'))).toBe(true)
     expect(deps.sink.ingest).toHaveBeenCalledTimes(1)
     expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ trigger: 'email.new', externalKey: 't1', title: 'Review' })
     expect(deps.kv.get('gmail.historyId')).toBe('555')

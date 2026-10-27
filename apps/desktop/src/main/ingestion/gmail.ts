@@ -65,8 +65,18 @@ function emailSignal(ctx: Ctx, m: GmailMessage): IngestSignal {
 }
 
 async function recentMessageIds(ctx: Ctx, query: string) {
-  const recent = await gmail<{ messages?: { id: string }[] }>(ctx, `/messages?q=${encodeURIComponent(query)}&maxResults=50`)
-  return (recent.messages ?? []).map((m) => m.id).reverse()
+  const q = encodeURIComponent(ctx.settings().email.inboxOnly ? `${query} in:inbox` : query)
+  const ids: string[] = []
+  let pageToken = ''
+  do {
+    const page = await gmail<{ messages?: { id: string }[]; nextPageToken?: string }>(
+      ctx,
+      `/messages?q=${q}&maxResults=500${pageToken && `&pageToken=${pageToken}`}`,
+    )
+    ids.push(...(page.messages ?? []).map((m) => m.id))
+    pageToken = page.nextPageToken ?? ''
+  } while (pageToken)
+  return ids.reverse()
 }
 
 async function newMessageIds(ctx: Ctx): Promise<{ ids: string[]; historyId: string }> {
