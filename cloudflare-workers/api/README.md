@@ -29,7 +29,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`, see `.dev.vars.ex
 ## Provider setup
 
 - GitHub App: callback URLs `<PUBLIC_URL>/oauth/github/callback` and `<PUBLIC_URL>/oauth/github_signin/callback`, "Expire user authorization tokens" on, webhook URL `<PUBLIC_URL>/webhooks/github`.
-- Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history groups:history im:history mpim:history search:read users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
+- Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history channels:read groups:history groups:read im:history im:read mpim:history mpim:read search:read users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
 - Google: OAuth client (web) with redirect `<PUBLIC_URL>/oauth/google/callback`, Gmail API enabled, scope `gmail.readonly`.
 
 ## Run locally

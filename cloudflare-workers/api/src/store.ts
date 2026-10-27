@@ -5,6 +5,8 @@ import type { ExchangeResult, TokenSet } from './oauth'
 
 const INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const RATE_LIMIT_PER_MINUTE = 60
+const DELIVERY_DEDUPE_MS = 24 * 60 * 60 * 1000
+const RATE_LIMIT_RETENTION_MINUTES = 60
 
 export const now = () => new Date().toISOString()
 
@@ -22,14 +24,32 @@ export async function enqueue(db: D1Database, userIds: string[], payload: InboxP
   )
 }
 
-export async function hitRateLimit(db: D1Database, key: string, limit = RATE_LIMIT_PER_MINUTE) {
+export async function hitRateLimit(db: D1Database, key: string, limit = RATE_LIMIT_PER_MINUTE, windowMs = 60_000) {
   const nowMs = Date.now()
-  const window = Math.floor(nowMs / 60_000)
+  const windowStart = Math.floor(nowMs / windowMs) * windowMs
   const row = await db
     .prepare('INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 1) ON CONFLICT (key, window) DO UPDATE SET count = count + 1 RETURNING count')
-    .bind(key, window)
+    .bind(key, windowStart / 60_000)
     .first<{ count: number }>()
-  return row!.count > limit ? Math.ceil(((window + 1) * 60_000 - nowMs) / 1000) : 0
+  return row!.count > limit ? Math.ceil((windowStart + windowMs - nowMs) / 1000) : 0
+}
+
+export async function enqueueOnce(db: D1Database, deliveryKey: string, userIds: string[], payload: InboxPayload) {
+  const claimed = await db
+    .prepare(
+      `INSERT INTO webhook_deliveries (id, expires_at) VALUES (?1, ?2)
+       ON CONFLICT (id) DO UPDATE SET expires_at = excluded.expires_at WHERE expires_at < ?3 RETURNING id`,
+    )
+    .bind(deliveryKey, new Date(Date.now() + DELIVERY_DEDUPE_MS).toISOString(), now())
+    .first()
+  if (!claimed) return false
+  try {
+    await enqueue(db, userIds, payload)
+  } catch (err) {
+    await db.prepare('DELETE FROM webhook_deliveries WHERE id = ?').bind(deliveryKey).run()
+    throw err
+  }
+  return true
 }
 
 export async function findUsersByRoutingKey(db: D1Database, provider: OAuthProvider, keys: string[]) {
@@ -54,6 +74,9 @@ export async function addRoutingKey(db: D1Database, provider: OAuthProvider, mat
     .bind(provider, newKey, matchKey)
     .run()
 }
+
+export const setRoutingKeys = (db: D1Database, userId: string, provider: OAuthProvider, keys: string[]) =>
+  db.prepare('UPDATE grants SET routing_keys = ? WHERE user_id = ? AND provider = ?').bind(JSON.stringify(keys), userId, provider).run()
 
 export interface GrantRow {
   user_id: string
@@ -137,6 +160,7 @@ export async function deleteExpired(db: D1Database) {
     db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').bind(ts),
     db.prepare('DELETE FROM email_links WHERE expires_at < ?').bind(ts),
     db.prepare('DELETE FROM completion_codes WHERE expires_at < ?').bind(ts),
-    db.prepare('DELETE FROM rate_limits WHERE window < ?').bind(Math.floor(Date.now() / 60_000) - 1),
+    db.prepare('DELETE FROM webhook_deliveries WHERE expires_at < ?').bind(ts),
+    db.prepare('DELETE FROM rate_limits WHERE window < ?').bind(Math.floor(Date.now() / 60_000) - RATE_LIMIT_RETENTION_MINUTES),
   ])
 }

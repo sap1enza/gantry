@@ -23,6 +23,7 @@ import type { AppEnv } from './env'
 import {
   authorizeUrl,
   exchangeCode,
+  githubInstallationKeys,
   GRANT_PROVIDERS,
   OAuthRejected,
   OAUTH_PROVIDERS,
@@ -39,10 +40,12 @@ import {
   findUsersByRoutingKey,
   getGrant,
   hitRateLimit,
+  enqueueOnce,
   mergeUsers,
   now,
   type GrantRow,
   saveGrant,
+  setRoutingKeys,
   updateGrantTokens,
 } from './store'
 
@@ -54,6 +57,10 @@ const SLACK_REPLAY_WINDOW_S = 5 * 60
 const EMAIL_SENDS_PER_MINUTE = 5
 const API_BODY_LIMIT = 64 * 1024
 const WEBHOOK_BODY_LIMIT = 1024 * 1024
+const INBOX_RESPONSE_BYTES = 4 * 1024 * 1024
+const DEVICE_REGISTRATIONS_PER_HOUR = 10
+const HOUR_MS = 60 * 60 * 1000
+const ROUTING_REFRESH_GRANTS = 25
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(100) })
 const ackSchema = z.object({ ids: z.array(z.string()).max(1000) })
@@ -185,7 +192,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   app.post(
     '/v1/devices',
     createMiddleware<AppEnv>(async (c, next) => {
-      const retryAfter = await hitRateLimit(c.env.DB, `ip:${c.req.header('cf-connecting-ip') ?? 'unknown'}`)
+      const retryAfter = await hitRateLimit(c.env.DB, `devices:${c.req.header('cf-connecting-ip') ?? 'unknown'}`, DEVICE_REGISTRATIONS_PER_HOUR, HOUR_MS)
       if (retryAfter) return tooMany(c, retryAfter)
       await next()
     }),
@@ -226,8 +233,13 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
 
   app.get('/v1/inbox', deviceAuth, async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query('limit')) || 100, 1), 500)
-    const { results } = await c.env.DB.prepare('SELECT id, payload, received_at FROM inbox WHERE user_id = ? AND expires_at > ? ORDER BY received_at LIMIT ?')
-      .bind(c.get('userId'), now(), limit)
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, payload, received_at FROM (
+         SELECT id, payload, received_at, ROW_NUMBER() OVER w AS n, SUM(LENGTH(CAST(payload AS BLOB))) OVER w AS bytes
+         FROM (SELECT * FROM inbox WHERE user_id = ? AND expires_at > ? ORDER BY received_at, id LIMIT ?) WINDOW w AS (ORDER BY received_at, id)
+       ) WHERE n = 1 OR bytes <= ? ORDER BY received_at, id`,
+    )
+      .bind(c.get('userId'), now(), limit, INBOX_RESPONSE_BYTES)
       .all<Record<string, string>>()
     return c.json({ items: results.map((r) => ({ id: r.id!, receivedAt: r.received_at!, payload: JSON.parse(r.payload!) as InboxPayload })) })
   })
@@ -291,6 +303,10 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
       .run()
     return c.json({ url: authorizeUrl(c.env, provider, state) })
   })
+
+  async function syncGithubRouting(c: Ctx, userId: string, accessToken: string, accountId: string) {
+    await setRoutingKeys(c.env.DB, userId, 'github', [`user:${accountId}`, ...(await githubInstallationKeys(fetchImpl, accessToken))])
+  }
 
   async function issueCompletionCode(c: Ctx, deviceId: string, pending: PendingAuth) {
     const code = randomToken()
@@ -357,6 +373,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
         await updateGrantTokens(c.env, userId, provider, refreshed)
         accessToken = refreshed.accessToken
         expiresAt = refreshed.expiresAt
+        if (provider === 'github') await syncGithubRouting(c, userId, accessToken, grant.account.id).catch(console.error)
       } catch (err) {
         console.error(err)
         if (!(err instanceof OAuthRejected)) return c.json({ error: 'provider_unavailable' }, 502)
@@ -417,6 +434,22 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     return issueCompletionCode(c, link.device_id, { kind: 'email', email: link.email! })
   })
 
+  async function refreshGithubRouting(c: Ctx) {
+    // shortcut: re-lists installations for the most recently refreshed live GitHub grants only, others catch up on their next token refresh; scope by org membership once there are many users
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM grants WHERE provider = 'github' AND status = 'connected' AND (expires_at IS NULL OR expires_at > ?) ORDER BY updated_at DESC LIMIT ?",
+    )
+      .bind(now(), ROUTING_REFRESH_GRANTS)
+      .all<GrantRow>()
+    const failed = (await Promise.allSettled(
+      results.map(async (row) => {
+        const grant = await decryptGrant(c.env, row)
+        await syncGithubRouting(c, row.user_id, grant.accessToken, grant.account.id)
+      }),
+    )).filter((r) => r.status === 'rejected')
+    if (failed.length) console.error(failed.map((r) => (r as PromiseRejectedResult).reason))
+  }
+
   app.post('/webhooks/github', async (c) => {
     const raw = await c.req.text()
     const expected = `sha256=${await hmacSha256Hex(c.env.GITHUB_WEBHOOK_SECRET, raw)}`
@@ -424,13 +457,17 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const payload = parseJsonOrNull(raw) as { action?: string; installation?: { id: number }; sender?: { id: number } } | null
     if (!payload) return c.json({ error: 'invalid_json' }, 400)
     const event = c.req.header('x-github-event') ?? 'unknown'
+    const deliveryId = c.req.header('x-github-delivery') ?? ''
     const installationKey = payload.installation && `installation:${payload.installation.id}`
     if (!installationKey) return c.json({ delivered: 0 })
+    if (event === 'installation_repositories' || (event === 'installation' && payload.action === 'created')) await refreshGithubRouting(c)
     if (event === 'installation' && payload.action === 'created' && payload.sender) {
       await addRoutingKey(c.env.DB, 'github', `user:${payload.sender.id}`, installationKey)
     }
     const users = await findUsersByRoutingKey(c.env.DB, 'github', [installationKey])
-    await enqueue(c.env.DB, users, { kind: 'github.webhook', event, deliveryId: c.req.header('x-github-delivery') ?? '', payload })
+    const item: InboxPayload = { kind: 'github.webhook', event, deliveryId, payload }
+    if (!deliveryId) await enqueue(c.env.DB, users, item)
+    else if (!(await enqueueOnce(c.env.DB, `github:${deliveryId}`, users, item))) return c.json({ delivered: 0 })
     return c.json({ delivered: users.length })
   })
 
@@ -440,13 +477,15 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > SLACK_REPLAY_WINDOW_S) return c.json({ error: 'stale_request' }, 401)
     const expected = `v0=${await hmacSha256Hex(c.env.SLACK_SIGNING_SECRET, `v0:${timestamp}:${raw}`)}`
     if (!(await timingSafeEqual(c.req.header('x-slack-signature') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
-    const payload = parseJsonOrNull(raw) as { type?: string; challenge?: string; authorizations?: { team_id: string; user_id: string }[] } | null
+    const payload = parseJsonOrNull(raw) as { type?: string; challenge?: string; event_id?: string; authorizations?: { team_id: string; user_id: string }[] } | null
     if (!payload) return c.json({ error: 'invalid_json' }, 400)
     if (payload.type === 'url_verification') return c.json({ challenge: payload.challenge })
     // shortcut: Slack only includes one authorization per event, call apps.event.authorizations.list when several Gantry users share a channel
     const keys = (payload.authorizations ?? []).map((a) => `${a.team_id}:${a.user_id}`)
     const users = await findUsersByRoutingKey(c.env.DB, 'slack', keys)
-    await enqueue(c.env.DB, users, { kind: 'slack.event', payload })
+    const item: InboxPayload = { kind: 'slack.event', payload }
+    if (!payload.event_id) await enqueue(c.env.DB, users, item)
+    else if (!(await enqueueOnce(c.env.DB, `slack:${payload.event_id}`, users, item))) return c.json({ delivered: 0 })
     return c.json({ delivered: users.length })
   })
 
