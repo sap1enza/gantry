@@ -44,9 +44,9 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 ┌──────────────────────── Mac ────────────────────────┐      ┌──── Cloudflare ────┐
 │ apps/desktop (Electron + React + TS)                │      │ cloudflare-workers/│
 │  ├ renderer: board, panels, settings                │      │  api (Hono + D1)   │
-│  ├ main: SQLite (better-sqlite3), Keychain,         │◄────►│  ├ /v1/actionables │
+│  ├ main: SQLite (node:sqlite), safeStorage,         │◄────►│  ├ /v1/actionables │
 │  │        poller, agent providers, local notifs     │ poll │  ├ /oauth/*        │
-│  └ providers/claude: Agent SDK, worktrees, node-pty │      │  ├ /webhooks/*     │
+│  └ providers/claude: Agent SDK, worktrees, sandbox  │      │  ├ /webhooks/*     │
 │                                                     │      │  └ /inbox (queue)  │
 │ packages/shared: types, API client, zod schemas     │      └───────┬────────────┘
 └─────────────────────────────────────────────────────┘              │ webhooks / OAuth
@@ -173,7 +173,7 @@ Actionable {
 - Instructions: auto-built from title, body, links, and fetched context (PR diff summary / Slack thread / email body). Editable.
 - Repository: inferred from source (GitHub remote match, API `repository`), else dropdown of registered repos.
 - Agent: provider + model.
-- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Mapped to Agent SDK permission mode + allowed tools.
+- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Enforced structurally: Agent SDK sandbox (filesystem write scope + network allowlist), GitHub tokens stripped for Read-only and Edit + test, and a per-worktree pre-push hook that blocks pushes except fast-forward pushes to the card's branch in Full. Out-of-worktree reads and web fetches ask the user; in Full every non-read-only `gh` command asks.
 
 **Concurrency**: `Max concurrent agents` setting (default 3). Beyond limit → card in In Progress tagged `Queued`, auto-starts when a slot frees.
 
@@ -246,7 +246,7 @@ Also: `PATCH /v1/actionables/:id` (title/body/links/tags) and `POST /v1/actionab
 
 ## 9. LLM detection layer
 
-Preferences › AI: provider (Anthropic · OpenAI · OpenAI-compatible URL), API key (Keychain), model id. Default Anthropic `claude-haiku-5-5`. Calls go directly from the app. Used by: Slack unreplied/follow-up, Email needs-action gate. Each decision is logged as a Received event with the verdict and reason; cards get an `AI detected` tag.
+Preferences › AI: provider (Anthropic · OpenAI · OpenAI-compatible URL), API key (encrypted secret store), model id. Default Anthropic `claude-haiku-5-5`. Calls go directly from the app. Used by: Slack unreplied/follow-up, Email needs-action gate. Each decision is logged as a Received event with the verdict and reason; cards get an `AI detected` tag.
 
 ---
 
@@ -278,7 +278,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Account**: name, sign-in status, device id, sign out.
 
-**Local data**: Delete all Gantry data — stops agents, removes Gantry worktrees (section 7 cleanup rule), wipes SQLite and Keychain, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
+**Local data**: Delete all Gantry data — stops agents, force-removes Gantry-created worktrees, wipes SQLite and stored secrets, calls Worker to delete inbox, revoke OAuth grants and API tokens. Confirm dialog. Disconnect single input: revoke that grant at Worker; existing cards kept and tagged `Source disconnected`.
 
 ---
 
@@ -294,17 +294,18 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 13. Worker
 
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
-- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `GET /oauth/:provider/start|callback`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
+- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `POST /oauth/:provider/start` (device auth), `GET /oauth/:provider/callback`, `POST /auth/complete`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
 - Webhook signature verification (GitHub HMAC, Slack signing secret).
 - Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
-- OAuth: access tokens go to the app's Keychain on connect; Worker keeps refresh tokens. GitHub user tokens expire after 8 h, Google after 1 h; the app calls the refresh route on 401 or before expiry. Webhook routing uses the grant → user mapping.
+- Sign-in and connection completion: OAuth callbacks and magic links never finalize directly. They issue a single-use, 10-minute completion code bound to the initiating device and redirect to `gantry://auth/complete?code=…` (the page also shows the code to paste). Only the initiating device can redeem it via `POST /auth/complete`, which closes login CSRF.
+- OAuth: access tokens go to the app's encrypted secret store on connect; Worker keeps refresh tokens. GitHub user tokens expire after 8 h, Google after 1 h; the app calls the refresh route on 401 or before expiry. Webhook routing uses the grant → user mapping.
 
 ---
 
 ## 14. Non-functional
 
-- All local data in SQLite under `~/Library/Application Support/Gantry/`; tokens in Keychain.
+- All local data in SQLite (`node:sqlite`, no native modules) under `~/Library/Application Support/Gantry/` (override with `GANTRY_USER_DATA`); secrets encrypted with Electron `safeStorage` (Keychain-backed).
 - Board renders ≤ 500 visible cards without jank; Activity paginates ("Load earlier events").
 - Pollers surface a `connection` event when throttled.
 - App closed: Worker queues; nothing is lost for 30 days.
