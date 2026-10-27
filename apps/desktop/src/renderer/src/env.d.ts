@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
-import type { GantryBridge } from '@gantry/shared'
+import type { GantryTransport } from '@gantry/shared/ipc'
 
 declare global {
   interface Window {
-    gantry?: GantryBridge
+    gantryTransport?: GantryTransport
   }
 }

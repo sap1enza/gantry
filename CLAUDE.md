@@ -16,7 +16,7 @@ macOS triage board that turns GitHub/Slack/Gmail/API signals into actionables an
 ## Contracts (coordinator-owned; do not edit without asking)
 - `packages/shared/src/*` — domain types, `GantryApi` IPC contract, `IngestSink`, `AgentProvider`, worker API schemas, `WorkerClient`.
 - `apps/desktop/src/main/contracts.ts` — `Ingestion`, `IngestionDeps`, `SecretStore`.
-- `apps/desktop/src/preload/index.ts` — generic RPC bridge (`window.gantry.api.<ns>.<method>(...)`, `window.gantry.onPush`).
+- `apps/desktop/src/preload/index.ts` — generic RPC bridge (`window.gantryTransport.invoke/onPush`, wrapped into a typed `GantryApi` by `createApiProxy` in the renderer (contextBridge cannot clone Proxies)).
 If a contract is wrong or missing something, ask the coordinator; do not fork types locally.
 
 ## Ownership map

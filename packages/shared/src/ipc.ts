@@ -179,6 +179,11 @@ export type GantryPush =
   | { type: 'settings.changed' }
   | { type: 'navigate'; view: 'triage' | 'activity' | 'connections' | 'preferences'; actionableId?: string }
 
+export interface GantryTransport {
+  invoke(path: string, args: unknown[]): Promise<unknown>
+  onPush(listener: (push: GantryPush) => void): () => void
+}
+
 export interface GantryBridge {
   api: GantryApi
   onPush(listener: (push: GantryPush) => void): () => void

@@ -1,9 +1,8 @@
-import { IPC_EVENT, IPC_INVOKE, type GantryBridge, type GantryPush } from '@gantry/shared/ipc'
-import { createApiProxy } from '@gantry/shared/rpc'
+import { IPC_EVENT, IPC_INVOKE, type GantryPush, type GantryTransport } from '@gantry/shared/ipc'
 import { contextBridge, ipcRenderer } from 'electron'
 
-const bridge: GantryBridge = {
-  api: createApiProxy((path, args) => ipcRenderer.invoke(IPC_INVOKE, path, args)),
+const transport: GantryTransport = {
+  invoke: (path, args) => ipcRenderer.invoke(IPC_INVOKE, path, args),
   onPush(listener) {
     const handler = (_: unknown, push: GantryPush) => listener(push)
     ipcRenderer.on(IPC_EVENT, handler)
@@ -11,4 +10,4 @@ const bridge: GantryBridge = {
   },
 }
 
-contextBridge.exposeInMainWorld('gantry', bridge)
+contextBridge.exposeInMainWorld('gantryTransport', transport)
