@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  DEEP_LINKS,
   IPC_EVENT,
   IPC_INVOKE,
   resolveApiMethod,
@@ -13,14 +14,13 @@ import {
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, safeStorage, shell } from 'electron'
 import { AgentRunner } from './agents/runner'
 import { createApi } from './api'
-import type { Ingestion } from './contracts'
 import { openDb } from './db'
 import { createRepositoryStore, createSecretStore, createSettingsStore, jsonTable } from './db/stores'
 import { Board } from './domain/board'
 import { createIngestion } from './ingestion'
 import { createClaudeProvider } from './providers/claude'
 import { AccountService } from './system/account'
-import { parseDeepLink, PROTOCOL, type DeepLink } from './system/deeplink'
+import { parseDeepLink, type DeepLink } from './system/deeplink'
 import { exec, shellCommand } from './system/exec'
 import { loginItemSync } from './system/login-item'
 import { notificationFor } from './system/notifications'
@@ -30,7 +30,7 @@ const MINUTE_MS = 60_000
 app.setPath('userData', process.env.GANTRY_USER_DATA ?? join(app.getPath('appData'), 'Gantry'))
 
 let window: BrowserWindow | undefined
-const linkFromArgv = (argv: string[]) => parseDeepLink(argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? '')
+const linkFromArgv = (argv: string[]) => parseDeepLink(argv.find((a) => a.startsWith(`${DEEP_LINKS.scheme}:`)) ?? '')
 let pendingCard: string | undefined
 let resolveCard = (target: string) => target
 let readyForAuth = (_complete: (code: string) => void) => {}
@@ -128,28 +128,18 @@ function main() {
   resolveCard = (target) => board.resolveTarget(target)?.id ?? target
   const account = new AccountService({ meta, secrets, workerUrl: () => settings.get().workerUrl })
 
-  const providers = new Map<string, AgentProvider>()
-  try {
-    const claude = createClaudeProvider()
-    providers.set(claude.id, claude)
-  } catch (err) {
-    console.error('Claude provider unavailable; running without agents', err)
-  }
+  const claude = createClaudeProvider()
+  const providers = new Map<string, AgentProvider>([[claude.id, claude]])
 
-  let ingestion: Ingestion | undefined
-  try {
-    ingestion = createIngestion({
-      sink: board,
-      kv: jsonTable(db, 'kv'),
-      getSettings: () => settings.get(),
-      worker: () => account.worker(),
-      secrets,
-      openExternal: (url) => shell.openExternal(url),
-    })
-    ingestion.onConnectionsChanged(() => push({ type: 'connections.changed' }))
-  } catch (err) {
-    console.error('Ingestion unavailable; running without integrations', err)
-  }
+  const ingestion = createIngestion({
+    sink: board,
+    kv: jsonTable(db, 'kv'),
+    getSettings: () => settings.get(),
+    worker: () => account.worker(),
+    secrets,
+    openExternal: (url) => shell.openExternal(url),
+  })
+  ingestion.onConnectionsChanged(() => push({ type: 'connections.changed' }))
 
   const runner = new AgentRunner({
     board,
@@ -158,7 +148,7 @@ function main() {
     exists: existsSync,
     settings: () => settings.get(),
     repositories: () => repos.list(),
-    fetchContext: async (a) => ingestion?.fetchContext(a),
+    fetchContext: (a) => ingestion.fetchContext(a),
   })
   board.agents = runner
 
@@ -212,7 +202,7 @@ function main() {
     else createWindow()
     api.account
       .completeAuth(code)
-      .then(() => ingestion?.syncNow())
+      .then(() => ingestion.syncNow())
       .catch((err: Error) => dialog.showErrorBox('Could not finish connecting', err.message))
   })
 
@@ -223,19 +213,15 @@ function main() {
   setInterval(() => board.housekeeping(), MINUTE_MS)
   applySettings(settings.get())
   runner.recover()
-  try {
-    ingestion?.start()
-  } catch (err) {
-    console.error('ingestion failed to start', err)
-  }
-  app.on('before-quit', () => ingestion?.stop())
+  ingestion.start()
+  app.on('before-quit', () => ingestion.stop())
 
   createWindow()
 }
 
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
-  app.setAsDefaultProtocolClient(PROTOCOL)
+  app.setAsDefaultProtocolClient(DEEP_LINKS.scheme)
   app.on('open-url', (event, url) => {
     event.preventDefault()
     openLink(parseDeepLink(url))
