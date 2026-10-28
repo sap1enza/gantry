@@ -13,6 +13,7 @@ export interface CardFieldVisibility {
   agent: boolean
   receivedTime: boolean
   repository: boolean
+  branch: boolean
   links: boolean
   priority: boolean
 }
@@ -87,5 +88,5 @@ export const DEFAULT_SETTINGS: Settings = {
   launchAtLogin: false,
   appearance: 'system',
   dockBadge: true,
-  cardFields: { source: true, status: true, agent: true, receivedTime: false, repository: false, links: true, priority: false },
+  cardFields: { source: true, status: true, agent: true, receivedTime: false, repository: false, branch: true, links: true, priority: false },
 }

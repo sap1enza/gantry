@@ -1,5 +1,5 @@
 import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, TAGS, type Actionable, type BoardSnapshot, type CardFieldVisibility, type Column, type ColumnId } from '@gantry/shared'
-import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal } from 'lucide-react'
+import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GitBranch, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal } from 'lucide-react'
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
@@ -13,6 +13,7 @@ const FIELD_LABELS: [keyof CardFieldVisibility, string][] = [
   ['agent', 'Agent'],
   ['receivedTime', 'Received time'],
   ['repository', 'Repository'],
+  ['branch', 'Branch'],
   ['links', 'Links'],
   ['priority', 'Priority'],
 ]
@@ -402,6 +403,12 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
           </a>
         ))}
       {fields.repository && card.repository && <span className="mono muted">{card.repository}</span>}
+      {fields.branch && card.dispatch && (
+        <span className="row mono muted small" style={{ gap: 5 }}>
+          <GitBranch size={11} />
+          <span className="truncate">{card.dispatch.branch}</span>
+        </span>
+      )}
       {(tags.length > 0 || priority) && (
         <div className="row wrap" style={{ gap: 6 }}>
           {tags.map((t) => (
