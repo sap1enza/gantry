@@ -9,6 +9,7 @@ import {
   TRIGGERS,
   type Actionable,
   type ActionablePatch,
+  type CardEdit,
   type ActivityEvent,
   type ActivityQuery,
   type AgentEvent,
@@ -325,11 +326,13 @@ export class Board implements IngestSink {
     this.update(
       existing.id,
       (a) => {
-        a.title = signal.title
-        if (signal.body !== undefined) a.body = signal.body
+        const userEdited = (a.metadata.userEdited as string[] | undefined) ?? []
+        const removedTags = (a.metadata.removedTags as string[] | undefined) ?? []
+        if (!userEdited.includes('title')) a.title = signal.title
+        if (signal.body !== undefined && !userEdited.includes('body')) a.body = signal.body
         if (signal.repository) a.repository = signal.repository
         a.links = mergeLinks(a.links, signal.links ?? [])
-        a.tags = unique([...a.tags, ...tags])
+        a.tags = unique([...a.tags, ...tags.filter((t) => !removedTags.includes(t))])
         a.triggers = unique([...a.triggers, signal.trigger])
         a.metadata = { ...a.metadata, ...externalMetadata(signal.metadata) }
         if (signal.id && signal.id !== a.id) a.metadata.aliasIds = unique([...((a.metadata.aliasIds as string[] | undefined) ?? []), signal.id]).slice(-MAX_ALIASES)
@@ -446,6 +449,29 @@ export class Board implements IngestSink {
     this.updateEach(this.where(clause, kind, TAGS.sourceDisconnected), (a) => {
       a.tags = [...a.tags, TAGS.sourceDisconnected]
     })
+  }
+
+  edit(id: string, patch: CardEdit) {
+    const title = patch.title?.trim()
+    if (patch.title !== undefined && !title) throw new Error('Title is required')
+    const systemTags: string[] = Object.values(TAGS)
+    this.update(
+      id,
+      (a) => {
+        const userEdited = (a.metadata.userEdited as string[] | undefined) ?? []
+        if (title) a.title = title
+        if (patch.body !== undefined) a.body = patch.body.trim() || undefined
+        if (patch.priority !== undefined) a.priority = patch.priority ?? undefined
+        if (patch.tags) {
+          const tags = unique([...a.tags.filter((t) => systemTags.includes(t)), ...patch.tags.map((t) => t.trim()).filter(Boolean)])
+          const removed = a.tags.filter((t) => !tags.includes(t))
+          a.metadata.removedTags = unique([...((a.metadata.removedTags as string[] | undefined) ?? []), ...removed]).filter((t) => !tags.includes(t))
+          a.tags = tags
+        }
+        a.metadata.userEdited = unique([...userEdited, ...(title ? ['title'] : []), ...(patch.body !== undefined ? ['body'] : [])])
+      },
+      { type: 'edited', actor: USER },
+    )
   }
 
   create(input: ManualActionableInput) {

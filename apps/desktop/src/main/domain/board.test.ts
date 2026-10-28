@@ -32,6 +32,25 @@ describe('ingest dedupe', () => {
     expect(eventTypes(card.id)).toEqual(['received', 'received'])
   })
 
+  it('edits title, body, priority and user tags while keeping system tags', () => {
+    const { board, eventTypes } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.update(id!, (a) => (a.tags = ['issue', TAGS.failed]))
+    board.edit(id!, { title: ' Renamed ', body: '', priority: 'high', tags: ['bug', ' ', 'bug'] })
+    expect(board.must(id!)).toMatchObject({ title: 'Renamed', priority: 'high', tags: [TAGS.failed, 'bug'] })
+    expect(board.must(id!).body).toBeUndefined()
+    expect(eventTypes(id!).at(-1)).toBe('edited')
+    expect(() => board.edit(id!, { title: '  ' })).toThrow('Title is required')
+  })
+
+  it('keeps user edits and removed tags when the source signals again', () => {
+    const { board } = setup()
+    const { actionableId: id } = board.ingest(signal({ tags: ['issue'] }))
+    board.edit(id!, { title: 'Mine', tags: [] })
+    board.ingest(signal({ tags: ['issue'], title: 'From source', body: 'new body' }))
+    expect(board.must(id!)).toMatchObject({ title: 'Mine', body: 'new body', tags: [] })
+  })
+
   it('returns Done cards to To-do', () => {
     const { board } = setup()
     const { actionableId } = board.ingest(signal())

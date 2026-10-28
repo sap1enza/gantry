@@ -31,6 +31,13 @@ export interface BoardFilter {
   showArchived?: boolean
 }
 
+export interface CardEdit {
+  title?: string
+  body?: string
+  priority?: Priority | null
+  tags?: string[]
+}
+
 export interface ManualActionableInput {
   title: string
   body?: string
@@ -104,6 +111,7 @@ export interface GantryApi {
     get(id: string): Promise<Actionable | undefined>
     search(query: string): Promise<Actionable[]>
     create(input: ManualActionableInput): Promise<Actionable>
+    edit(id: string, patch: CardEdit): Promise<void>
     move(id: string, column: ColumnId, position: number): Promise<void>
     dispatchPreview(id: string): Promise<DispatchPreview>
     start(id: string, overrides?: DispatchOverrides): Promise<void>

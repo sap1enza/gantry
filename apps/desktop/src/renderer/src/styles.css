@@ -301,3 +301,6 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); margi
 .collapsible[open] .chevron { transform: rotate(90deg); }
 .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.tag-remove { border: 0; background: none; padding: 0 0 0 4px; color: inherit; cursor: pointer; display: inline-grid; place-items: center; opacity: 0.6; }
+.tag-remove:hover { opacity: 1; }
+.tag-input { height: 22px; width: 120px; font-size: 11px; }

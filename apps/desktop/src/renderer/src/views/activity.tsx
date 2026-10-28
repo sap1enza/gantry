@@ -22,6 +22,7 @@ const TYPE_LABEL: Record<EventType, string> = {
   snoozed: 'Snoozed',
   unsnoozed: 'Unsnoozed',
   moved: 'Moved',
+  edited: 'Edited',
   resolved_externally: 'Resolved externally',
   connection: 'Connection',
 }

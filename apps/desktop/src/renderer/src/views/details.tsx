@@ -1,9 +1,9 @@
-import { actionsFor, isAgentActive, isCustomColumn, type Actionable, type Column, type ActivityEvent, type AgentEvent, type TranscriptEntry } from '@gantry/shared'
-import { ChevronRight, ExternalLink, FileText, GitPullRequest, List, PanelRightClose, X } from 'lucide-react'
+import { actionsFor, isAgentActive, isCustomColumn, PRIORITIES, TAGS, type Actionable, type Column, type ActivityEvent, type AgentEvent, type TranscriptEntry } from '@gantry/shared'
+import { ChevronRight, ExternalLink, FileText, GitPullRequest, List, PanelRightClose, Pencil, Plus, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, SOURCE_LABELS, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
+import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
 
 export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
@@ -45,6 +45,7 @@ export function DetailsPanel({ id }: { id: string }) {
   const [log, setLog] = useState<ActivityEvent[]>([])
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [side, setSide] = useState<'transcript' | 'log'>()
+  const [editing, setEditing] = useState(false)
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState('')
 
@@ -56,6 +57,7 @@ export function DetailsPanel({ id }: { id: string }) {
     setEvents([])
     setTranscript([])
     setSide(undefined)
+    setEditing(false)
     let current = true
     void api.activity.list({ actionableId: id, limit: 3 }).then((log) => current && setEvents(log.events))
     void api.board.transcript(id).then((t) => current && setTranscript(t))
@@ -128,7 +130,10 @@ export function DetailsPanel({ id }: { id: string }) {
       <aside className="panel" aria-label="Actionable details">
         <div className="row">
           <span className="eyebrow">Actionable · {card.displayId}</span>
-          <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close panel" onClick={app.closePanel}>
+          <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Edit card" onClick={() => setEditing(!editing)}>
+            <Pencil size={13} />
+          </button>
+          <button className="icon-btn" aria-label="Close panel" onClick={app.closePanel}>
             <PanelRightClose size={14} />
           </button>
         </div>
@@ -138,21 +143,21 @@ export function DetailsPanel({ id }: { id: string }) {
             Created {clock(card.createdAt)}
           </span>
         </div>
-        <h2 className="selectable">{card.title}</h2>
-        <div className="row small">
-          <SourceIcon kind={card.source.kind} />
-          <span style={{ fontSize: 12 }}>{card.source.name}</span>
-          <Tag>{card.source.kind === 'api' ? 'Custom API source' : SOURCE_LABELS[card.source.kind]}</Tag>
-          <PriorityTag priority={card.priority} />
-        </div>
-        {card.tags.length > 0 && (
-          <div className="row wrap" style={{ gap: 6 }}>
-            {card.tags.map((t) => (
-              <Tag key={t}>{t}</Tag>
-            ))}
-          </div>
+        {editing ? (
+          <CardEditor card={card} onClose={() => setEditing(false)} />
+        ) : (
+          <>
+            <h2 className="selectable">{card.title}</h2>
+            <div className="row small">
+              <SourceIcon kind={card.source.kind} />
+              <span style={{ fontSize: 12 }}>{card.source.name}</span>
+              {card.source.kind === 'api' && <Tag>Custom API source</Tag>}
+              <PriorityTag priority={card.priority} />
+            </div>
+            <TagEditor card={card} />
+            {card.body && <Markdown source={card.body} onLink={openLink} />}
+          </>
         )}
-        {card.body && <Markdown source={card.body} onLink={openLink} />}
         {card.links.length > 0 && (
           <div className="col" style={{ gap: 9 }}>
             {card.links.map((l) => (
@@ -161,6 +166,17 @@ export function DetailsPanel({ id }: { id: string }) {
                 <span className="truncate">{l.label}</span>
               </a>
             ))}
+          </div>
+        )}
+
+        {actions.length > 0 && (
+          <div className="col" style={{ gap: 10 }}>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {actions.map((a) => (
+                <ActionButton key={a} action={a} large onClick={(el) => app.act(a, card, el)} />
+              ))}
+            </div>
+            {isAgentActive(card) && <span className="small muted">Pause or stop the agent before snoozing.</span>}
           </div>
         )}
 
@@ -184,6 +200,27 @@ export function DetailsPanel({ id }: { id: string }) {
               </button>
             </div>
           </div>
+        )}
+
+        {reopening && (
+          <section>
+            <h3>Reopen with feedback</h3>
+            <textarea className="field" rows={3} autoFocus placeholder="What should the agent change?" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+            <div className="row">
+              <button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
+                Cancel
+              </button>
+              <button
+                className="btn sm primary"
+                onClick={async () => {
+                  await app.run(api.board.reopen(card.id, feedback.trim() || undefined))
+                  app.setReopenFor(undefined)
+                }}
+              >
+                Reopen and resume
+              </button>
+            </div>
+          </section>
         )}
 
         {d && (
@@ -253,26 +290,11 @@ export function DetailsPanel({ id }: { id: string }) {
           </details>
         )}
 
-        {d && (
-          <section>
-            <h3>Agent output</h3>
-            <ul className="timeline" style={{ margin: 0 }}>
-              {messages.map((t, i) => (
-                <li key={i}>
-                  <span className="selectable clamp-3">{describeAgentEvent(t.event)}</span>
-                  <span className="mono">{clockSeconds(t.at)}</span>
-                </li>
-              ))}
-              {!messages.length && <li className="muted">No agent messages yet</li>}
-            </ul>
-            <button className={`btn sm ${side === 'transcript' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => setSide(side === 'transcript' ? undefined : 'transcript')}>
-              <FileText size={12} /> Open transcript
-            </button>
-          </section>
-        )}
-
-        <section>
-          <h3>Latest activity</h3>
+        <details className="collapsible">
+          <summary className="row">
+            <ChevronRight size={13} className="chevron" />
+            <h3>Activity</h3>
+          </summary>
           <ul className="timeline" style={{ margin: 0 }}>
             {events.map((e) => (
               <li key={e.id}>
@@ -285,41 +307,107 @@ export function DetailsPanel({ id }: { id: string }) {
           <button className={`btn sm ${side === 'log' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => (side === 'log' ? setSide(undefined) : void openLog())}>
             <List size={12} /> View log
           </button>
-        </section>
+        </details>
 
-        {reopening && (
-          <section>
-            <h3>Reopen with feedback</h3>
-            <textarea className="field" rows={3} autoFocus placeholder="What should the agent change?" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
-            <div className="row">
-              <button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
-                Cancel
-              </button>
-              <button
-                className="btn sm primary"
-                onClick={async () => {
-                  await app.run(api.board.reopen(card.id, feedback.trim() || undefined))
-                  app.setReopenFor(undefined)
-                }}
-              >
-                Reopen and resume
-              </button>
-            </div>
-          </section>
-        )}
-
-        {actions.length > 0 && (
-          <div className="col" style={{ gap: 10 }}>
-            <div className="row wrap" style={{ gap: 8 }}>
-              {actions.map((a) => (
-                <ActionButton key={a} action={a} large onClick={(el) => app.act(a, card, el)} />
+        {d && (
+          <details className="collapsible" open>
+            <summary className="row">
+              <ChevronRight size={13} className="chevron" />
+              <h3>Output</h3>
+            </summary>
+            <ul className="timeline" style={{ margin: 0 }}>
+              {messages.map((t, i) => (
+                <li key={i}>
+                  <span className="selectable clamp-3">{describeAgentEvent(t.event)}</span>
+                  <span className="mono">{clockSeconds(t.at)}</span>
+                </li>
               ))}
-            </div>
-            {isAgentActive(card) && <span className="small muted">Pause or stop the agent before snoozing.</span>}
-          </div>
+              {!messages.length && <li className="muted">No agent messages yet</li>}
+            </ul>
+            <button className={`btn sm ${side === 'transcript' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => setSide(side === 'transcript' ? undefined : 'transcript')}>
+              <FileText size={12} /> Open transcript
+            </button>
+          </details>
         )}
-
       </aside>
     </>
+  )
+}
+
+const SYSTEM_TAGS: string[] = Object.values(TAGS)
+
+function TagEditor({ card }: { card: Actionable }) {
+  const app = useApp()
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  const known = [...new Set(app.snapshot?.actionables.flatMap((a) => a.tags) ?? [])].filter((t) => !SYSTEM_TAGS.includes(t) && !card.tags.includes(t))
+  const save = (tags: string[]) => app.run(api.board.edit(card.id, { tags }))
+  const add = async () => {
+    if (draft.trim()) await save([...card.tags, draft.trim()])
+    setDraft('')
+    setAdding(false)
+  }
+  return (
+    <div className="row wrap" style={{ gap: 6 }}>
+      {card.tags.map((t) => (
+        <Tag key={t}>
+          {t}
+          {!SYSTEM_TAGS.includes(t) && (
+            <button className="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => save(card.tags.filter((x) => x !== t))}>
+              <X size={10} />
+            </button>
+          )}
+        </Tag>
+      ))}
+      {adding ? (
+        <>
+          <input
+            className="field tag-input"
+            autoFocus
+            list="known-tags"
+            placeholder="Tag name"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => (e.key === 'Enter' ? void add() : e.key === 'Escape' && setAdding(false))}
+            onBlur={() => void add()}
+          />
+          <datalist id="known-tags">
+            {known.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
+        </>
+      ) : (
+        <button className="btn sm ghost" onClick={() => setAdding(true)}>
+          <Plus size={11} /> Tag
+        </button>
+      )}
+    </div>
+  )
+}
+
+function CardEditor({ card, onClose }: { card: Actionable; onClose: () => void }) {
+  const app = useApp()
+  const [title, setTitle] = useState(card.title)
+  const [body, setBody] = useState(card.body ?? '')
+  const [priority, setPriority] = useState(card.priority ?? 'normal')
+  const save = async () => {
+    await app.run(api.board.edit(card.id, { title, body, priority }))
+    onClose()
+  }
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <input className="field" aria-label="Title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && title.trim() && void save()} />
+      <textarea className="field" aria-label="Description" rows={6} placeholder="Description (Markdown)" value={body} onChange={(e) => setBody(e.target.value)} />
+      <div className="row">
+        <Select label="Priority" value={priority} options={PRIORITIES.map((p) => ({ value: p, label: p[0]!.toUpperCase() + p.slice(1) }))} onChange={setPriority} />
+        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn sm primary" disabled={!title.trim()} onClick={save}>
+          Save
+        </button>
+      </div>
+    </div>
   )
 }

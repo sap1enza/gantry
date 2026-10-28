@@ -76,6 +76,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       get: async (id) => board.resolveTarget(id),
       search: async (query) => board.search(query),
       create: async (input) => board.create(input),
+      edit: async (id, patch) => board.edit(id, patch),
       move: (id, column, position) => runner.move(id, column, position),
       dispatchPreview: (id) => runner.preview(id),
       start: (id, overrides) => runner.start(id, overrides),

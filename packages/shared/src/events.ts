@@ -15,6 +15,7 @@ export const EVENT_TYPES = [
   'snoozed',
   'unsnoozed',
   'moved',
+  'edited',
   'resolved_externally',
   'connection',
 ] as const
