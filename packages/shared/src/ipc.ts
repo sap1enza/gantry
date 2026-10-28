@@ -155,8 +155,6 @@ export interface GantryApi {
     get(): Promise<Settings>
     update(patch: Partial<Settings>): Promise<Settings>
     setTrigger(trigger: TriggerId, enabled: boolean): Promise<void>
-    setLlmKey(key: string): Promise<void>
-    hasLlmKey(): Promise<boolean>
     chooseWorkspaceLocation(): Promise<string | undefined>
   }
   repos: {

@@ -33,14 +33,13 @@ export interface CreateActionableResponse {
   url: string
 }
 
-export type OAuthProvider = 'github' | 'slack'
+export type OAuthProvider = 'github'
 
 export type InboxPayload =
   | { kind: 'actionable.create'; id: string; tokenName: string; request: CreateActionableRequest }
   | { kind: 'actionable.update'; target: string; patch: PatchActionableRequest }
   | { kind: 'actionable.dismiss'; target: string }
   | { kind: 'github.webhook'; event: string; deliveryId: string; payload: unknown }
-  | { kind: 'slack.event'; payload: unknown }
   | { kind: 'connection'; provider: OAuthProvider; status: ConnectionStatus; account?: GrantAccount }
 
 export interface InboxItem {

@@ -1,6 +1,6 @@
 # gantry-api
 
-Cloudflare Worker (Hono + D1) for Gantry: device registration, per-user inbox, public actionables API, OAuth callbacks, token refresh, magic-link sign-in, GitHub/Slack webhooks. See `docs/PRD.md` sections 8 and 13.
+Cloudflare Worker (Hono + D1) for Gantry: device registration, per-user inbox, public actionables API, OAuth callbacks, token refresh, magic-link sign-in, GitHub webhooks. See `docs/PRD.md` sections 8 and 13.
 
 ## Configuration
 
@@ -27,7 +27,6 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`, see `.dev.vars.ex
 ## Provider setup
 
 - GitHub App: callback URLs `<PUBLIC_URL>/oauth/github/callback` and `<PUBLIC_URL>/oauth/github_signin/callback`, "Expire user authorization tokens" on, webhook URL `<PUBLIC_URL>/webhooks/github`.
-- Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history channels:read groups:history groups:read im:history im:read mpim:history mpim:read search:read users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
 
 ## Run locally
 

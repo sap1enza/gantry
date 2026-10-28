@@ -2,20 +2,17 @@ import { PROVIDER_SOURCE, type Actionable, type ConnectionInfo, type InboxItem, 
 import type { Ingestion, IngestionDeps } from '../contracts'
 import { createCtx, NotConnectedError, report, ThrottledError, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
-import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
 
 const INBOX_INTERVAL_MS = 15_000
 const SEEN_ITEMS = 1_000
 const MAX_CONTEXT = 8_000
-const PROVIDERS: OAuthProvider[] = ['github', 'slack']
+const PROVIDERS: OAuthProvider[] = ['github']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
-  slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt'],
 }
-const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.', slack: 'slack.' }
+const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
   github: 'https://github.com/settings/installations',
-  slack: 'https://slack.com/apps/manage',
 }
 
 interface Job {
@@ -27,8 +24,6 @@ interface Job {
 
 const JOBS: Job[] = [
   { name: 'github.reconcile', provider: 'github', interval: () => 300_000 + Math.random() * 300_000, run: reconcileGithub },
-  { name: 'slack.unreplied', provider: 'slack', interval: () => 60_000, run: checkUnreplied },
-  { name: 'slack.followUp', provider: 'slack', interval: () => 3_600_000, run: scanFollowUps },
 ]
 
 type Exclusive = (run: () => Promise<void>) => Promise<void>
@@ -63,8 +58,6 @@ function itemSignal(item: InboxItem): IngestSignal {
       return { ...base, externalKey: p.target, title: `Dismiss ${p.target}` }
     case 'github.webhook':
       return { ...base, source: { kind: 'github', name: 'GitHub' }, title: `GitHub ${p.event} webhook` }
-    case 'slack.event':
-      return { ...base, source: { kind: 'slack', name: 'Slack' }, title: 'Slack event' }
     case 'connection':
       return { ...base, source: { kind: PROVIDER_SOURCE[p.provider], name: p.provider }, title: `Connection ${p.status}` }
   }
@@ -93,8 +86,6 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem, signal: IngestSignal, 
       return ctx.setConnection(p.provider, { status: p.status })
     case 'github.webhook':
       return githubWebhook(ctx, p.event, p.payload as Parameters<typeof githubWebhook>[2])
-    case 'slack.event':
-      return slackEvent(ctx, p.payload as Parameters<typeof slackEvent>[1])
   }
 }
 
@@ -106,7 +97,6 @@ function forget(ctx: Ctx, provider: OAuthProvider) {
 }
 
 function contextFor(ctx: Ctx, a: Actionable) {
-  if (a.source.kind === 'slack') return slackContext(ctx, a.metadata)
   if (!a.externalKey) return undefined
   if (a.source.kind === 'github') return githubContext(ctx, a.externalKey)
   return undefined

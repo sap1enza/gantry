@@ -54,7 +54,6 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const EMAIL_LINK_TTL_MS = 15 * 60 * 1000
 const COMPLETION_CODE_TTL_MS = 10 * 60 * 1000
 const REFRESH_SKEW_MS = 5 * 60 * 1000
-const SLACK_REPLAY_WINDOW_S = 5 * 60
 const EMAIL_SENDS_PER_MINUTE = 5
 const API_BODY_LIMIT = 64 * 1024
 const WEBHOOK_BODY_LIMIT = 1024 * 1024
@@ -254,7 +253,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     await Promise.allSettled(
       results.map(async (row) => {
         const grant = await decryptGrant(c.env, row)
-        await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken)
+        await revokeGrant(fetchImpl, c.env, grant.accessToken)
       }),
     )
     await deleteUser(c.env.DB, userId).run()
@@ -427,7 +426,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const row = await findGrant(c)
     if (!row) return c.body(null, 204)
     const grant = await decryptGrant(c.env, row)
-    await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken).catch(console.error)
+    await revokeGrant(fetchImpl, c.env, grant.accessToken).catch(console.error)
     await c.env.DB.prepare('DELETE FROM grants WHERE user_id = ? AND provider = ?').bind(row.user_id, row.provider).run()
     return c.body(null, 204)
   })
@@ -504,22 +503,6 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     return c.json({ delivered: users.length })
   })
 
-  app.post('/webhooks/slack', async (c) => {
-    const raw = await c.req.text()
-    const timestamp = Number(c.req.header('x-slack-request-timestamp'))
-    if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > SLACK_REPLAY_WINDOW_S) return c.json({ error: 'stale_request' }, 401)
-    const expected = `v0=${await hmacSha256Hex(c.env.SLACK_SIGNING_SECRET, `v0:${timestamp}:${raw}`)}`
-    if (!(await timingSafeEqual(c.req.header('x-slack-signature') ?? '', expected))) return c.json({ error: 'bad_signature' }, 401)
-    const payload = parseJsonOrNull(raw) as { type?: string; challenge?: string; event_id?: string; authorizations?: { team_id: string; user_id: string }[] } | null
-    if (!payload) return c.json({ error: 'invalid_json' }, 400)
-    if (payload.type === 'url_verification') return c.json({ challenge: payload.challenge })
-    // shortcut: Slack only includes one authorization per event, call apps.event.authorizations.list when several Gantry users share a channel
-    const keys = (payload.authorizations ?? []).map((a) => `${a.team_id}:${a.user_id}`)
-    const users = await findUsersByRoutingKey(c.env.DB, 'slack', keys)
-    const item: InboxPayload = { kind: 'slack.event', payload }
-    if (!(await enqueueOnce(c.env.DB, users, item, payload.event_id && `slack:${payload.event_id}`))) return c.json({ delivered: 0 })
-    return c.json({ delivered: users.length })
-  })
 
   app.onError((err, c) => {
     console.error(err)

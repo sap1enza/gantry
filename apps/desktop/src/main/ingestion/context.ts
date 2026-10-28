@@ -15,7 +15,6 @@ import {
   type TriggerId,
 } from '@gantry/shared'
 import type { IngestionDeps } from '../contracts'
-import { classify, LlmError } from './llm'
 
 export class ThrottledError extends Error {
   constructor(
@@ -62,7 +61,6 @@ interface RetryState {
   retryAt: number
 }
 
-const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'token_expired', 'token_revoked', 'not_authed'])
 const REFRESH_MARGIN_MS = 5 * 60_000
 
 export function backoffUntil(res: Response, now: number): number | undefined {
@@ -78,7 +76,6 @@ export function backoffUntil(res: Response, now: number): number | undefined {
 
 export interface EmitOptions {
   filtered?: string
-  llm?: { instruction: string; content: string }
 }
 
 export type Ctx = ReturnType<typeof createCtx>
@@ -168,7 +165,7 @@ export function createCtx(deps: IngestionDeps) {
       if (backoff) block(p, backoff)
       if (backoff && !res.ok) throw new ThrottledError(p, backoff)
       const body = res.status === 204 ? undefined : await res.json().catch(() => undefined)
-      const rejected = res.status === 401 || (p === 'slack' && SLACK_AUTH_ERRORS.has((body as { error?: string })?.error ?? ''))
+      const rejected = res.status === 401
       if (rejected && attempt === 0) {
         accessToken = (await refresh(p, true)).accessToken
         continue
@@ -197,17 +194,6 @@ export function createCtx(deps: IngestionDeps) {
     if (opts.filtered) {
       deps.sink.logIgnored(signal, 'ignored:filtered', opts.filtered)
       return
-    }
-    if (opts.llm) {
-      const verdict = await classify(settings().llm, deps.secrets.get(SECRET_KEYS.llmApiKey), opts.llm.instruction, opts.llm.content).catch((e) => {
-        if (e instanceof LlmError && !isTransient(e)) return { decision: false, reason: e.message }
-        throw e
-      })
-      if (!verdict.decision) {
-        deps.sink.logIgnored(signal, 'ignored:llm', verdict.reason)
-        return
-      }
-      signal = { ...signal, aiDetected: true, receivedDetail: verdict.reason }
     }
     return deps.sink.ingest(signal)
   }

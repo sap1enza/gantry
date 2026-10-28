@@ -1,4 +1,4 @@
-import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, TAGS, type Actionable, type BoardSnapshot, type CardFieldVisibility, type Column, type ColumnId } from '@gantry/shared'
+import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, type Actionable, type BoardSnapshot, type CardFieldVisibility, type Column, type ColumnId } from '@gantry/shared'
 import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GitBranch, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal } from 'lucide-react'
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
@@ -363,9 +363,7 @@ function statusTags(card: Actionable, now: number): string[] {
   else if ((card.column === 'done' || card.column === 'review') && state === 'completed') out.push(`Completed · ${clock(card.doneAt ?? card.updatedAt)}`)
   if (card.dismissedAt) out.push('Dismissed')
   if (card.snoozedUntil && new Date(card.snoozedUntil).getTime() > now) out.push(`Snoozed until ${clock(card.snoozedUntil)}`)
-  const tags = card.tags.filter((t) => t !== TAGS.aiDetected)
-  if (card.tags.includes(TAGS.aiDetected)) tags.length ? (tags[0] = `${tags[0]} · ${TAGS.aiDetected}`) : tags.push(TAGS.aiDetected)
-  return [...out, ...tags]
+  return [...out, ...card.tags]
 }
 
 interface CardHandlers {

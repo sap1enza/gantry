@@ -1,4 +1,4 @@
-import { CLAUDE_MODELS, LLM_DEFAULT_MODELS, PERMISSION_PRESETS, type LlmProvider, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
+import { CLAUDE_MODELS, PERMISSION_PRESETS, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
 import { ArrowUpRight, FolderCheck, Mail, Plus, Trash2 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp } from '../app'
@@ -79,9 +79,6 @@ export function PreferencesView() {
               </Row>
             </Group>
 
-            <Group title="AI" sub="Used to detect Slack replies owed and follow-ups. Calls go directly from this Mac.">
-              <AiSettings />
-            </Group>
 
             <Group title="Notifications" sub="Clicking a notification opens the card.">
               {(
@@ -99,7 +96,7 @@ export function PreferencesView() {
             </Group>
 
             <Group title="Inputs & integrations">
-              <Row title="Manage connections and triggers" hint="OAuth access, GitHub and Slack triggers, and custom API sources.">
+              <Row title="Manage connections and triggers" hint="GitHub access and triggers, and custom API sources.">
                 <button className="btn" onClick={() => app.go('connections')}>
                   <ArrowUpRight size={13} /> Open Connections
                 </button>
@@ -384,58 +381,6 @@ export function WorkspaceCleanupRow() {
           ]}
           onChange={(v) => set({ workspaceCleanup: v })}
         />
-      </Row>
-    </>
-  )
-}
-
-export function AiSettings() {
-  const app = useApp()
-  const s = app.settings
-  const [hasKey, setHasKey] = useState(false)
-  const [key, setKey] = useState('')
-  useEffect(() => void api.settings.hasLlmKey().then(setHasKey), [])
-  if (!s) return null
-  const set = (patch: Partial<Settings>) => app.updateSettings(patch)
-  return (
-    <>
-      <Row title="Provider">
-        <Select<LlmProvider>
-          label="AI provider"
-          value={s.llm.provider}
-          options={[
-            { value: 'anthropic', label: 'Anthropic' },
-            { value: 'openai', label: 'OpenAI' },
-            { value: 'openai_compatible', label: 'OpenAI-compatible URL' },
-          ]}
-          onChange={(v) => v !== s.llm.provider && set({ llm: { ...s.llm, provider: v, model: LLM_DEFAULT_MODELS[v] } })}
-        />
-      </Row>
-      <Row title="Model">
-        <input className="field mono" style={{ width: 220 }} aria-label="Model id" required placeholder="model-id" defaultValue={s.llm.model} key={s.llm.model} onBlur={(e) => e.target.value.trim() && e.target.value !== s.llm.model && set({ llm: { ...s.llm, model: e.target.value.trim() } })} />
-        {!s.llm.model && <Tag tone="amber">Required</Tag>}
-      </Row>
-      {s.llm.provider === 'openai_compatible' && (
-        <Row title="Base URL">
-          <input className="field mono" style={{ width: 280 }} placeholder="https://llm.internal/v1" aria-label="Base URL" required type="url" defaultValue={s.llm.baseUrl ?? ''} onBlur={(e) => set({ llm: { ...s.llm, baseUrl: e.target.value.trim() || undefined } })} />
-          {!s.llm.baseUrl && <Tag tone="amber">Required</Tag>}
-        </Row>
-      )}
-      <Row title="API key" hint="Stored in the macOS Keychain. It can be replaced, never read back.">
-        <Tag tone={hasKey ? 'green' : 'amber'}>{hasKey ? 'Saved' : 'Not set'}</Tag>
-        <input className="field" type="password" autoComplete="off" style={{ width: 200 }} placeholder={hasKey ? '••••••••••••' : 'Paste key'} aria-label="API key" value={key} onChange={(e) => setKey(e.target.value)} />
-        <button
-          className="btn"
-          disabled={!key}
-          onClick={async () => {
-            await app.run(api.settings.setLlmKey(key))
-            setKey('')
-            setHasKey(await api.settings.hasLlmKey())
-            app.toast('API key saved to Keychain')
-          }}
-        >
-          Save
-        </button>
       </Row>
     </>
   )

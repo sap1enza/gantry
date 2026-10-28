@@ -16,7 +16,6 @@ export interface IngestSignal {
   tags?: string[]
   metadata?: Record<string, unknown>
   autoStart?: boolean
-  aiDetected?: boolean
   receivedDetail?: string
   actor?: string
   occurredAt: string

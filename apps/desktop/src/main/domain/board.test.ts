@@ -119,9 +119,9 @@ describe('auto-resolve', () => {
 
   it('never resolves triggers without autoResolves', () => {
     const { board } = setup()
-    const slack = signal({ trigger: 'slack.mention', source: { kind: 'slack', name: 'Slack' }, externalKey: 'C1:123.4' })
-    const { actionableId: id } = board.ingest(slack)
-    board.resolve({ trigger: 'slack.mention', externalKey: 'C1:123.4', reason: 'replied' })
+    const custom = signal({ trigger: 'api.custom', source: { kind: 'api', name: 'Honeybadger' }, externalKey: 'hb-1' })
+    const { actionableId: id } = board.ingest(custom)
+    board.resolve({ trigger: 'api.custom', externalKey: 'hb-1', reason: 'fixed' })
     expect(board.must(id!).column).toBe('todo')
   })
 })
@@ -213,7 +213,7 @@ describe('source disconnect', () => {
     const { board } = setup()
     const { actionableId: gh } = board.ingest(signal())
     board.markSourceDisconnected('github')
-    board.markSourceConnected('slack')
+    board.markSourceConnected('api')
     expect(board.must(gh!).tags).toContain(TAGS.sourceDisconnected)
     board.markSourceConnected('github')
     expect(board.must(gh!).tags).not.toContain(TAGS.sourceDisconnected)

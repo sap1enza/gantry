@@ -292,7 +292,7 @@ export class Board implements IngestSink {
     const existing = this.byKey(signal.source.kind, signal.externalKey)
     const actor = sourceActor(signal)
     const received = (outcome: ReceivedOutcome): EventInput => ({ type: 'received', outcome, detail: signal.receivedDetail, actor })
-    const tags = [TRIGGERS[signal.trigger].tag, ...(signal.tags ?? []), ...(signal.aiDetected ? [TAGS.aiDetected] : [])]
+    const tags = [TRIGGERS[signal.trigger].tag, ...(signal.tags ?? [])]
 
     if (!existing) {
       const needsRepository = signal.source.kind === 'api' && !findRepository(this.deps.repositories(), signal.repository)

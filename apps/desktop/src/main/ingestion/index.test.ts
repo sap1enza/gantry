@@ -85,7 +85,7 @@ describe('pollInbox', () => {
       throw new Error('channel_not_found')
     })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const s = { trigger: 'slack.follow_up', source: { kind: 'slack', name: 'Slack' }, externalKey: 'k', title: 't', occurredAt: '' } as const
+    const s = { trigger: 'github.mention', source: { kind: 'github', name: 'GitHub' }, externalKey: 'k', title: 't', occurredAt: '' } as const
     expect(await ctx.retryable('k', s, run)).toBe(true)
     expect(await ctx.retryable('k', s, run)).toBe(true)
     expect(run).toHaveBeenCalledTimes(1)
@@ -97,8 +97,8 @@ describe('pollInbox', () => {
   })
 
   it('holds API updates and dismissals behind a pending create, but not other items', async () => {
-    const slack: InboxItem = { id: '3', receivedAt: '', payload: { kind: 'slack.event', payload: {} } }
-    const worker = workerWith([create('1', 'a'), { id: '2', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'Honeybadger:hb-1' } }, slack])
+    const webhook: InboxItem = { id: '3', receivedAt: '', payload: { kind: 'github.webhook', event: 'ping', deliveryId: 'd', payload: {} } }
+    const worker = workerWith([create('1', 'a'), { id: '2', receivedAt: '', payload: { kind: 'actionable.dismiss', target: 'Honeybadger:hb-1' } }, webhook])
     const deps = fakeDeps(worker)
     deps.sink.ingest.mockImplementation(() => {
       throw new WorkerError(503, 'busy')
@@ -206,30 +206,30 @@ describe('tokens and rate limits', () => {
 
   it('refreshes before expiry', async () => {
     const worker = workerWith([])
-    worker.refreshGrant.mockResolvedValue(grantFor('slack', { id: 'U1', login: 'me' }, 'new'))
+    worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'me' }, 'new'))
     const deps = fakeDeps(worker)
-    const ctx = connectedCtx(deps, grantFor('slack', { id: 'U1', login: 'me' }, 'old', new Date(NOW.getTime() + 60_000).toISOString()))
-    routeFetch([['slack.com', () => res({ ok: true })]])
-    await ctx.json('slack', 'https://slack.com/api/x')
-    expect(worker.refreshGrant).toHaveBeenCalledWith('slack', { force: false })
+    const ctx = connectedCtx(deps, grantFor('github', { id: '1', login: 'me' }, 'old', new Date(NOW.getTime() + 60_000).toISOString()))
+    routeFetch([['api.github.com', () => res({})]])
+    await ctx.json('github', 'https://api.github.com/x')
+    expect(worker.refreshGrant).toHaveBeenCalledWith('github', { force: false })
   })
 
   it('decrypts a grant once, reloads it after a refresh, and forgets it with its retries on disconnect', async () => {
     const worker = workerWith([])
-    worker.refreshGrant.mockResolvedValue(grantFor('slack', { id: 'U1', login: 'me' }, 'new'))
+    worker.refreshGrant.mockResolvedValue(grantFor('github', { id: '1', login: 'me' }, 'new'))
     const deps = fakeDeps(worker)
-    const ctx = connectedCtx(deps, grantFor('slack', { id: 'U1', login: 'me' }, 'old'))
+    const ctx = connectedCtx(deps, grantFor('github', { id: '1', login: 'me' }, 'old'))
     const read = vi.spyOn(deps.secrets, 'get')
-    const fetch = routeFetch([['slack.com', () => res({ ok: true })]])
-    await ctx.json('slack', 'https://slack.com/api/x')
-    await ctx.json('slack', 'https://slack.com/api/x')
+    const fetch = routeFetch([['api.github.com', () => res({})]])
+    await ctx.json('github', 'https://api.github.com/x')
+    await ctx.json('github', 'https://api.github.com/x')
     expect(read).toHaveBeenCalledTimes(1)
-    await ctx.refresh('slack', true)
-    await ctx.json('slack', 'https://slack.com/api/x')
+    await ctx.refresh('github', true)
+    await ctx.json('github', 'https://api.github.com/x')
     expect(new Headers(fetch.mock.calls.at(-1)![1]!.headers).get('authorization')).toBe('Bearer new')
-    deps.kv.set('ingestion.retries', { 'slack.m1': { attempts: 1, retryAt: NOW.getTime() }, 'inbox:1': { attempts: 1, retryAt: NOW.getTime() } })
-    ctx.forget('slack', 'slack.')
-    expect(ctx.account('slack')).toBeUndefined()
+    deps.kv.set('ingestion.retries', { 'github.m1': { attempts: 1, retryAt: NOW.getTime() }, 'inbox:1': { attempts: 1, retryAt: NOW.getTime() } })
+    ctx.forget('github', 'github.')
+    expect(ctx.account('github')).toBeUndefined()
     expect(Object.keys(deps.kv.get('ingestion.retries')!)).toEqual(['inbox:1'])
   })
 
@@ -237,10 +237,10 @@ describe('tokens and rate limits', () => {
     const worker = workerWith([])
     worker.refreshGrant.mockRejectedValue(new WorkerError(404, 'no grant'))
     const deps = fakeDeps(worker)
-    const ctx = connectedCtx(deps, grantFor('slack', { id: 'U1', login: 'lucas' }))
-    routeFetch([['slack.com', () => res({ ok: false, error: 'token_revoked' })]])
-    await expect(ctx.json('slack', 'https://slack.com/api/auth.test')).rejects.toThrow('reconnect required')
-    expect(ctx.connectionState().slack?.status).toBe('reconnect_required')
+    const ctx = connectedCtx(deps, grantFor('github', { id: '1', login: 'lucas' }))
+    routeFetch([['api.github.com', () => res({}, 401)]])
+    await expect(ctx.json('github', 'https://api.github.com/user')).rejects.toThrow('reconnect required')
+    expect(ctx.connectionState().github?.status).toBe('reconnect_required')
   })
 
   it('decides when to back off', () => {
@@ -270,25 +270,7 @@ describe('tokens and rate limits', () => {
     expect(fetch.mock.calls[0]![1]!.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('logs ignored:llm with the reason when the LLM is misconfigured, but rethrows transient failures', async () => {
-    const deps = fakeDeps()
-    deps.secrets.set('llm.apiKey', 'k')
-    const ctx = createCtx(deps)
-    const signal = { trigger: 'slack.unreplied', source: { kind: 'slack', name: 'Slack' }, externalKey: 't', title: 'x', occurredAt: '' } as const
-    routeFetch([['api.anthropic.com', () => res({}, 404)]])
-    await ctx.emit(signal, { llm: { instruction: 'i', content: 'c' } })
-    expect(deps.sink.logIgnored).toHaveBeenCalledWith(signal, 'ignored:llm', 'LLM request failed: HTTP 404')
-    routeFetch([['api.anthropic.com', () => res({}, 529)]])
-    await expect(ctx.emit(signal, { llm: { instruction: 'i', content: 'c' } })).rejects.toThrow('HTTP 529')
-  })
 
-  it('logs ignored:llm when the gate has no API key', async () => {
-    const deps = fakeDeps()
-    const ctx = createCtx(deps)
-    await ctx.emit({ trigger: 'slack.unreplied', source: { kind: 'slack', name: 'Slack' }, externalKey: 't', title: 'x', occurredAt: '' }, { llm: { instruction: 'i', content: 'c' } })
-    expect(deps.sink.logIgnored.mock.calls[0]![1]).toBe('ignored:llm')
-    expect(deps.sink.ingest).not.toHaveBeenCalled()
-  })
 })
 
 describe('serial', () => {
@@ -343,33 +325,21 @@ describe('createIngestion', () => {
     expect(worker.inbox).toHaveBeenCalledTimes(2)
   })
 
-  it("runs other providers' jobs while one provider's job hangs", async () => {
-    const deps = fakeDeps(workerWith([]))
-    deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'lucas' })))
-    deps.secrets.set('grant.slack', JSON.stringify(grantFor('slack', { id: 'U1', login: 'me' })))
-    routeFetch([
-      ['api.github.com', () => new Promise<never>(() => {}) as never],
-      ['slack.com', () => res({ ok: true, messages: { matches: [] } })],
-    ])
-    const ingestion = createIngestion(deps)
-    void ingestion.syncNow()
-    await vi.waitFor(() => expect(ingestion.connections().find((c) => c.provider === 'slack')?.lastSyncAt).toBeDefined())
-  })
 
   it('opens the worker OAuth start URL on connect and revokes on disconnect', async () => {
-    const worker = { oauthStartUrl: vi.fn(async () => 'https://worker/oauth/slack/start?x'), revokeGrant: vi.fn(async () => undefined) }
+    const worker = { oauthStartUrl: vi.fn(async () => 'https://worker/oauth/github/start?x'), revokeGrant: vi.fn(async () => undefined) }
     const deps = fakeDeps(worker)
-    deps.secrets.set('grant.slack', JSON.stringify(grantFor('slack', { id: 'U1', login: 'l' })))
-    deps.kv.set('slack.pending', [])
+    deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'l' })))
+    deps.kv.set('github.active', {})
     const ingestion = createIngestion(deps)
-    await ingestion.connect('slack')
-    expect(deps.openExternal).toHaveBeenCalledWith('https://worker/oauth/slack/start?x')
-    await ingestion.disconnect('slack')
-    expect(worker.revokeGrant).toHaveBeenCalledWith('slack')
-    expect(deps.secrets.get('grant.slack')).toBeUndefined()
-    expect(deps.kv.get('slack.pending')).toBeUndefined()
-    expect(ingestion.connections()[1]).toMatchObject({ provider: 'slack', status: 'disconnected' })
-    expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('slack')
+    await ingestion.connect('github')
+    expect(deps.openExternal).toHaveBeenCalledWith('https://worker/oauth/github/start?x')
+    await ingestion.disconnect('github')
+    expect(worker.revokeGrant).toHaveBeenCalledWith('github')
+    expect(deps.secrets.get('grant.github')).toBeUndefined()
+    expect(deps.kv.get('github.active')).toBeUndefined()
+    expect(ingestion.connections()[0]).toMatchObject({ provider: 'github', status: 'disconnected' })
+    expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('github')
   })
 
 })

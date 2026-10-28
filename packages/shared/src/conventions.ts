@@ -2,7 +2,6 @@ import type { SourceKind } from './actionable'
 import type { OAuthProvider } from './api'
 
 export const SECRET_KEYS = {
-  llmApiKey: 'llm.apiKey',
   grant: (provider: OAuthProvider) => `grant.${provider}`,
 } as const
 
@@ -17,6 +16,6 @@ export const DEEP_LINKS = {
   authComplete: (code: string) => `gantry://auth/complete?code=${encodeURIComponent(code)}`,
 } as const
 
-export const PROVIDER_SOURCE: Record<OAuthProvider, SourceKind> = { github: 'github', slack: 'slack' }
+export const PROVIDER_SOURCE: Record<OAuthProvider, SourceKind> = { github: 'github' }
 
 export const GITHUB_FAILED_CONCLUSIONS: readonly string[] = ['failure', 'timed_out', 'startup_failure', 'action_required']

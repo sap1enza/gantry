@@ -1,6 +1,6 @@
 # Gantry — Product Requirements Document
 
-Gantry is a macOS app that turns incoming work (GitHub, Slack, custom API) into **actionables** on a triage board and dispatches coding agents to work on them in isolated workspaces.
+Gantry is a macOS app that turns incoming work (GitHub, custom API) into **actionables** on a triage board and dispatches coding agents to work on them in isolated workspaces.
 
 Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbOB1kO/Untitled?node-id=0-1) — five screens: Triage, Connections, Activity, Preferences, Welcome.
 
@@ -11,9 +11,9 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 | Term | Meaning |
 |---|---|
 | Actionable | A card on the board. Can be dispatched to an agent. Has a source, links, context, and lifecycle state. |
-| Source | Where an actionable came from: `github`, `slack`, `api` (custom name, e.g. Honeybadger), `manual`. |
+| Source | Where an actionable came from: `github`, `api` (custom name, e.g. Honeybadger), `manual`. |
 | Trigger | A per-source rule that decides whether an incoming event creates an actionable (e.g. "PR with failing CI"). |
-| Input / Connection | An OAuth-connected integration (GitHub, Slack) or the API source. |
+| Input / Connection | An OAuth-connected integration (GitHub) or the API source. |
 | Agent provider | A pluggable runtime that executes an actionable. v1: Claude Code. Later: Codex, Orca. |
 | Workspace | Per-actionable git worktree under the configured workspace location. |
 | Worker | Cloudflare Worker that hosts the public API, OAuth callbacks, webhook receivers, and per-user inbox queue. |
@@ -32,7 +32,7 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 **Non-goals (v1)**
 - Teams / shared boards / multi-user workspaces.
 - Multi-device sync (identity model allows it later).
-- Email inputs (removed; may return later).
+- Email and Slack inputs (removed; may return later).
 - Signed/notarized distribution and auto-update.
 - Agent providers other than Claude Code (interface exists; only one implementation).
 
@@ -50,7 +50,7 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 │                                                     │      │  └ /inbox (queue)  │
 │ packages/shared: types, API client, zod schemas     │      └───────┬────────────┘
 └─────────────────────────────────────────────────────┘              │ webhooks / OAuth
-                                                        GitHub · Slack · Honeybadger · automations
+                                                        GitHub · Honeybadger · automations
 ```
 
 **Monorepo (pnpm workspaces)**
@@ -62,7 +62,7 @@ Design reference: [Figma mockup](https://www.figma.com/design/DsAORjXJUM4arQDlbO
 **Data flow**
 1. External systems hit the Worker (webhooks, API POSTs) → stored in the user's inbox (D1).
 2. Desktop app polls `GET /v1/inbox` every 15 s, acks delivered items.
-3. Inbox items pass through **trigger evaluation** (per-source toggles, filters, optional LLM gate) → create/update actionable or log as ignored.
+3. Inbox items pass through **trigger evaluation** (per-source toggles, filters) → create/update actionable or log as ignored.
 4. Reconciliation poller backfills missed events and resolves external state (cadence in section 8).
 5. User dispatches → agent provider creates worktree, runs agent, streams events → timeline + Activity.
 
@@ -88,13 +88,13 @@ Actionable {
   id: string            // GT-### display id + uuid
   title: string
   body?: string         // markdown
-  source: { kind: 'github'|'slack'|'api'|'manual', name: string, icon?: string }
-  externalKey?: string  // dedupe key: source + entity id (PR URL, Slack msg ts, api external_id)
+  source: { kind: 'github'|'api'|'manual', name: string, icon?: string }
+  externalKey?: string  // dedupe key: source + entity id (PR URL, api external_id)
   links: { label: string, url: string }[]
   repository?: string   // owner/name
   instructions?: string // agent prompt override
   priority?: 'low'|'normal'|'high'|'urgent'
-  tags: string[]        // e.g. 'CI failed', 'Needs reply · AI detected', 'Resolved externally', 'Stopped', 'Failed'
+  tags: string[]        // e.g. 'CI failed', 'Resolved externally', 'Stopped', 'Failed'
   metadata: Record<string, unknown>
   column: string        // 'todo'|'in_progress'|'review'|'done'|<custom column id>
   position: number      // manual order within column
@@ -128,7 +128,7 @@ Actionable {
 - Any → Dismissed (archived; kills agent if running, using the same confirmation as Stop when "Confirm before stopping" is on).
 - Any → Snoozed (hidden; not allowed while agent running).
 - Manual move to custom columns: allowed from To-do, Review, Done, custom; from In Progress only when paused/stopped. Agents never run in a custom column.
-- Auto-resolve (GitHub only, per table in 8.1): To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only. Slack, API, and manual cards never auto-resolve; they move only by user action.
+- Auto-resolve (GitHub only, per table in 8.1): To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only. API and manual cards never auto-resolve; they move only by user action.
 
 **Card buttons (icon + label)**
 
@@ -170,7 +170,7 @@ Actionable {
 - Completion: prompt instructs a final structured block (summary, files changed, branch, PR URL, tests run, open questions). Parsed into `result`; links auto-added. Failure → Review tagged `Failed` with error.
 
 **Dispatch sheet** (shown when "Confirm before dispatching" is on, and always when the repository cannot be inferred; otherwise defaults apply):
-- Instructions: auto-built from title, body, links, and fetched context (PR diff summary / Slack thread). Editable.
+- Instructions: auto-built from title, body, links, and fetched context (PR diff summary). Editable.
 - Repository: inferred from source (GitHub remote match, API `repository`), else dropdown of registered repos.
 - Agent: provider + model.
 - Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Enforced structurally: Agent SDK sandbox (filesystem write scope + network allowlist), GitHub tokens stripped for Read-only and Edit + test, and a per-worktree pre-push hook that blocks pushes except fast-forward pushes to the card's branch in Full. Out-of-worktree reads and web fetches ask the user; in Full every non-read-only `gh` command asks.
@@ -189,9 +189,9 @@ Actionable {
 
 ## 8. Integrations
 
-All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. One grant per provider in v1 (one GitHub account, one Slack workspace); grants are keyed by provider so more can be added later. Token refresh: section 13. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
+All OAuth apps are Gantry-owned; secrets live in the Worker. Worker runs the OAuth callback and stores grants keyed by user. One grant per provider in v1 (one GitHub account); grants are keyed by provider so more can be added later. Token refresh: section 13. Connections view: status (Connected / Reconnect required / Disconnected), Manage access, Disconnect, per-trigger toggles. "Turning a trigger off stops new actionables; existing work is untouched."
 
-**Delivery**: webhooks → Worker → inbox (primary). Reconciliation polling every 5–10 min backfills and resolves state. Each poller tracks rate-limit headers and backs off before the limit (GitHub `x-ratelimit-remaining`, Slack `Retry-After`).
+**Delivery**: webhooks → Worker → inbox (primary). Reconciliation polling every 5–10 min backfills and resolves state. Each poller tracks rate-limit headers and backs off before the limit (GitHub `x-ratelimit-remaining`, `Retry-After`).
 
 ### 8.1 GitHub (GitHub App)
 Scope: selected repositories.
@@ -206,18 +206,7 @@ Scope: selected repositories.
 | Dependabot alerts | alerts in selected repos ≥ severity threshold (default high) | alert fixed/dismissed |
 | New issues | assigned to me, or any new issue in selected repos (toggle) | closed |
 
-### 8.2 Slack
-Settings: channel allow/deny list, "check unreplied after N minutes" (default 30), LLM provider.
-
-| Trigger | Matches |
-|---|---|
-| New mentions | @me in channels I'm in + DMs (+ @here/@channel in DMs) |
-| Unreplied mentions (LLM) | mentions re-checked after N min; LLM decides a reply is still owed |
-| Conversations needing follow-up (LLM) | threads/DMs where I posted in last 7 days; LLM finds commitments with a remaining next step |
-
-Delivery: Slack Events API with user-token scopes delivers `message.channels`, `message.groups`, `message.im` for conversations the user belongs to, so no bot needs to join channels. Mentions are detected by scanning message text for the user's id. Cards include the original message text so the user can verify before dispatching.
-
-### 8.3 API & custom sources
+### 8.2 API & custom sources
 `POST https://<worker>/v1/actionables` with `Authorization: Bearer <token>`. Tokens created in Connections (`Create API token`), stored in Worker, shown once.
 
 ```json
@@ -243,7 +232,7 @@ Also: `PATCH /v1/actionables/:id` (title/body/links/tags) and `POST /v1/actionab
 
 ## 9. LLM detection layer
 
-Preferences › AI: provider (Anthropic · OpenAI · OpenAI-compatible URL), API key (encrypted secret store), model id. Default Anthropic `claude-haiku-5-5`. Calls go directly from the app. Used by: Slack unreplied/follow-up. Each decision is logged as a Received event with the verdict and reason; cards get an `AI detected` tag.
+Removed together with the Slack and email inputs.
 
 ---
 
@@ -251,7 +240,7 @@ Preferences › AI: provider (Anthropic · OpenAI · OpenAI-compatible URL), API
 
 One view, filterable by event type, source, date, text, and actionable. Live updates. Export JSON/CSV. Retention setting (default 90 days).
 
-Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate / ignored:llm), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed` (card enters Review), `failed`, `done`, `reopened`, `dismissed`, `snoozed`, `unsnoozed`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected).
+Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed` (card enters Review), `failed`, `done`, `reopened`, `dismissed`, `snoozed`, `unsnoozed`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected).
 
 Every event stores `actionableId?`, `source`, `actor` (user / agent / source / Gantry), `title`, `detail`, `timestamp`. Clicking an event opens the card; the card panel lists its events.
 
@@ -265,7 +254,6 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **Snooze presets**: 1 h, 3 h, tomorrow 9 am, next Monday, custom.
 
-**AI**: provider, key, model (section 9).
 
 **Notifications**: per type — agent needs input, agent completed, agent failed, new actionable. Click opens the card.
 
@@ -282,7 +270,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 12. First run
 
 1. Modal: name + optional GitHub/email sign-in.
-2. Welcome view with three steps: Connect inputs (GitHub / Slack), Choose triggers, Dispatch first agent (requires Claude Code on PATH and ≥1 registered repository). Status "N of 3 complete".
+2. Welcome view with three steps: Connect inputs (GitHub), Choose triggers, Dispatch first agent (requires Claude Code on PATH and ≥1 registered repository). Status "N of 3 complete".
 3. Empty board below with "Connect GitHub" / "Create manually". API banner: "Set up API access".
 4. Welcome collapses to a banner once any actionable exists; Help reopens it.
 
@@ -291,8 +279,8 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 13. Worker
 
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
-- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `POST /oauth/:provider/start` (device auth), `GET /oauth/:provider/callback`, `POST /auth/complete`, `POST /webhooks/github`, `POST /webhooks/slack`, `DELETE /v1/me` (delete all).
-- Webhook signature verification (GitHub HMAC, Slack signing secret).
+- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `POST /oauth/:provider/start` (device auth), `GET /oauth/:provider/callback`, `POST /auth/complete`, `POST /webhooks/github`, `DELETE /v1/me` (delete all).
+- Webhook signature verification (GitHub HMAC).
 - Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.
 - Sign-in and connection completion: OAuth callbacks and magic links never finalize directly. They issue a single-use, 10-minute completion code bound to the initiating device and redirect to `gantry://auth/complete?code=…` (the page also shows the code to paste). Only the initiating device can redeem it via `POST /auth/complete`, which closes login CSRF.

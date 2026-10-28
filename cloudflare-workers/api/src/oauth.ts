@@ -1,7 +1,7 @@
 import type { GrantAccount, OAuthProvider } from '@gantry/shared'
 import type { Env } from './env'
 
-export const GRANT_PROVIDERS: OAuthProvider[] = ['github', 'slack']
+export const GRANT_PROVIDERS: OAuthProvider[] = ['github']
 export type OAuthStartProvider = OAuthProvider | 'github_signin'
 export const OAUTH_PROVIDERS: OAuthStartProvider[] = [...GRANT_PROVIDERS, 'github_signin']
 
@@ -29,13 +29,6 @@ const providerConfig = (env: Env, provider: OAuthProvider) =>
       clientSecret: env.GITHUB_CLIENT_SECRET,
       authorizeParams: {},
     },
-    slack: {
-      authorizeUrl: 'https://slack.com/oauth/v2/authorize',
-      tokenUrl: 'https://slack.com/api/oauth.v2.access',
-      clientId: env.SLACK_CLIENT_ID,
-      clientSecret: env.SLACK_CLIENT_SECRET,
-      authorizeParams: { user_scope: 'channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,search:read,users:read' },
-    },
   })[provider]
 
 const tokenProvider = (provider: OAuthStartProvider): OAuthProvider => (provider === 'github_signin' ? 'github' : provider)
@@ -59,16 +52,15 @@ async function requestTokens(fetchImpl: typeof fetch, env: Env, provider: OAuthP
     body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...params }),
   })
   const data = (await res.json().catch(() => ({}))) as Record<string, any>
-  const t = provider === 'slack' && data.authed_user?.access_token ? data.authed_user : data
   if (res.status >= 500) throw new Error(`${provider} token endpoint unavailable: ${res.status}`)
-  if (!res.ok || data.error || data.ok === false || typeof t.access_token !== 'string') {
+  if (!res.ok || data.error || typeof data.access_token !== 'string') {
     throw new OAuthRejected(`${provider} token request failed: ${data.error ?? res.status}`)
   }
   const tokens: TokenSet = {
-    accessToken: t.access_token,
-    refreshToken: t.refresh_token,
-    expiresAt: t.expires_in ? new Date(Date.now() + Number(t.expires_in) * 1000).toISOString() : undefined,
-    scopes: typeof t.scope === 'string' ? t.scope.split(/[ ,]+/).filter(Boolean) : [],
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresAt: data.expires_in ? new Date(Date.now() + Number(data.expires_in) * 1000).toISOString() : undefined,
+    scopes: typeof data.scope === 'string' ? data.scope.split(/[ ,]+/).filter(Boolean) : [],
   }
   return { tokens, data }
 }
@@ -96,20 +88,10 @@ export async function githubInstallationKeys(fetchImpl: typeof fetch, accessToke
 }
 
 export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: OAuthStartProvider, code: string): Promise<ExchangeResult> {
-  const { tokens, data } = await requestTokens(fetchImpl, env, tokenProvider(provider), {
+  const { tokens } = await requestTokens(fetchImpl, env, tokenProvider(provider), {
     code,
     redirect_uri: redirectUri(env, provider),
   })
-  if (provider === 'slack') {
-    const userId: string = data.authed_user.id
-    const teamId: string = data.team?.id
-    const info = await getJson(fetchImpl, `https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, tokens.accessToken)
-    return {
-      ...tokens,
-      account: { id: userId, login: info.user?.name ?? userId, name: info.user?.real_name, avatarUrl: info.user?.profile?.image_72, team: data.team?.name },
-      routingKeys: [`${teamId}:${userId}`],
-    }
-  }
   const account = await githubIdentity(fetchImpl, tokens.accessToken)
   const installations = provider === 'github' ? await githubInstallationKeys(fetchImpl, tokens.accessToken) : []
   return { ...tokens, account, routingKeys: [`user:${account.id}`, ...installations] }
@@ -120,14 +102,10 @@ export async function refreshTokens(fetchImpl: typeof fetch, env: Env, provider:
   return { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken }
 }
 
-export async function revokeGrant(fetchImpl: typeof fetch, env: Env, provider: OAuthProvider, accessToken: string) {
-  if (provider === 'github') {
-    await fetchImpl(`https://api.github.com/applications/${env.GITHUB_CLIENT_ID}/grant`, {
-      method: 'DELETE',
-      headers: { ...GITHUB_HEADERS, authorization: `Basic ${btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`)}` },
-      body: JSON.stringify({ access_token: accessToken }),
-    })
-  } else {
-    await fetchImpl('https://slack.com/api/auth.revoke', { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } })
-  }
+export async function revokeGrant(fetchImpl: typeof fetch, env: Env, accessToken: string) {
+  await fetchImpl(`https://api.github.com/applications/${env.GITHUB_CLIENT_ID}/grant`, {
+    method: 'DELETE',
+    headers: { ...GITHUB_HEADERS, authorization: `Basic ${btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`)}` },
+    body: JSON.stringify({ access_token: accessToken }),
+  })
 }

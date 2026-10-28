@@ -63,13 +63,6 @@ describe('api', () => {
     expect(s.board.must(id).column).toBe('todo')
   })
 
-  it('stores the LLM key encrypted under the shared secret name', async () => {
-    const { gantry, secrets } = api()
-    await gantry.settings.setLlmKey(' sk-1 ')
-    expect(secrets.get('llm.apiKey')).toBe('sk-1')
-    expect(await gantry.settings.hasLlmKey()).toBe(true)
-  })
-
   it('deleteAllData stops agents, removes recorded worktrees, deletes at the worker, then wipes and relaunches', async () => {
     const workerFetch = vi.fn(async (url: URL) =>
       url.pathname === '/v1/devices' ? Response.json({ deviceId: 'd1', deviceSecret: 'x', userId: 'u1' }) : new Response(null, { status: 204 }),
@@ -131,8 +124,8 @@ describe('api follow-ups', () => {
     const disconnect = vi.fn(async () => undefined)
     const markSourceDisconnected = vi.spyOn(s.board, 'markSourceDisconnected')
     const { gantry } = api(s, undefined, { disconnect })
-    await gantry.connections.disconnect('slack')
-    expect(disconnect).toHaveBeenCalledWith('slack')
+    await gantry.connections.disconnect('github')
+    expect(disconnect).toHaveBeenCalledWith('github')
     expect(markSourceDisconnected).not.toHaveBeenCalled()
   })
 

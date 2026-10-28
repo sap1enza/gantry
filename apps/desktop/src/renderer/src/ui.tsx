@@ -2,7 +2,6 @@ import { PROVIDER_SOURCE, unique, type Actionable, type CardAction, type OAuthPr
 import {
   Check,
   Clock,
-  Hash,
   Pause,
   PencilLine,
   Play,
@@ -28,11 +27,10 @@ export function Github(props: LucideProps) {
 
 const SOURCE_ICONS: Record<SourceKind, (p: LucideProps) => ReactNode> = {
   github: Github,
-  slack: Hash,
   api: Webhook,
   manual: PencilLine,
 }
-export const SOURCE_LABELS: Record<SourceKind, string> = { github: 'GitHub', slack: 'Slack', api: 'API', manual: 'Manual' }
+export const SOURCE_LABELS: Record<SourceKind, string> = { github: 'GitHub', api: 'API', manual: 'Manual' }
 export const OAUTH_INPUTS = (Object.keys(PROVIDER_SOURCE) as OAuthProvider[]).map((provider) => ({ provider, kind: PROVIDER_SOURCE[provider] }))
 export const INPUTS: { provider: OAuthProvider | 'api'; kind: SourceKind }[] = [...OAUTH_INPUTS, { provider: 'api', kind: 'api' }]
 

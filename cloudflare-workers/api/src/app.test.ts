@@ -86,9 +86,6 @@ beforeAll(async () => {
     GITHUB_CLIENT_ID: 'gh-id',
     GITHUB_CLIENT_SECRET: 'gh-secret',
     GITHUB_WEBHOOK_SECRET: 'gh-hook',
-    SLACK_CLIENT_ID: 'sl-id',
-    SLACK_CLIENT_SECRET: 'sl-secret',
-    SLACK_SIGNING_SECRET: 'sl-sign',
   }
 }, 30_000)
 
@@ -207,7 +204,7 @@ describe('hardening', () => {
     const { auth, userId } = await registerDevice()
     const insert = (id: string, size: number) =>
       env.DB.prepare("INSERT INTO inbox (id, user_id, payload, received_at, expires_at) VALUES (?, ?, ?, ?, '2999-01-01')")
-        .bind(id, userId, JSON.stringify({ kind: 'slack.event', payload: { blob: 'a'.repeat(size) } }), `2026-01-01T00:00:0${id}`)
+        .bind(id, userId, JSON.stringify({ kind: 'github.webhook', event: 'ping', deliveryId: id, payload: { blob: 'a'.repeat(size) } }), `2026-01-01T00:00:0${id}`)
         .run()
     for (const id of ['1', '2', '3', '4']) await insert(id, 1_100_000)
     expect((await inbox(auth)).map((i) => i.id)).toEqual(['1', '2', '3'])
@@ -315,13 +312,6 @@ describe('oauth', () => {
     expect((await me(auth)).grants[0]!.status).toBe('reconnect_required')
   })
 
-  it('requests search and conversation read scopes in the Slack user scopes', async () => {
-    const { auth } = await registerDevice()
-    const { url } = (await (await call('/oauth/slack/start', { method: 'POST', auth })).json()) as { url: string }
-    expect(new URL(url).searchParams.get('user_scope')!.split(',')).toEqual(
-      expect.arrayContaining(['search:read', 'channels:read', 'groups:read', 'im:read', 'mpim:read']),
-    )
-  })
 
   it('routes every page of the user installations to a new GitHub grant', async () => {
     const { auth, userId } = await registerDevice()
@@ -529,53 +519,5 @@ describe('github webhook', () => {
     const body = JSON.stringify({ installation: { id: 42 } })
     expect((await deliver(body, `sha256=${await hmacSha256Hex('wrong', body)}`)).status).toBe(401)
     expect((await deliver(body, '')).status).toBe(401)
-  })
-})
-
-describe('slack webhook', () => {
-  const send = async (payload: unknown, { secret = 'sl-sign', ts = Math.floor(Date.now() / 1000) } = {}) => {
-    const body = JSON.stringify(payload)
-    const signature = `v0=${await hmacSha256Hex(secret, `v0:${ts}:${body}`)}`
-    return call('/webhooks/slack', { method: 'POST', body, headers: { 'x-slack-request-timestamp': String(ts), 'x-slack-signature': signature } })
-  }
-
-  async function connectSlack(auth: string) {
-    fetchMock.mockImplementation(async (input) => {
-      const url = String(input)
-      if (url === 'https://slack.com/api/oauth.v2.access')
-        return json({ ok: true, team: { id: 'T1', name: 'Acme' }, authed_user: { id: 'U1', access_token: 'xoxp-1', scope: 'im:history,users:read' } })
-      if (url.startsWith('https://slack.com/api/users.info')) return json({ ok: true, user: { name: 'ada', real_name: 'Ada' } })
-      throw new Error(`unexpected fetch ${url}`)
-    })
-    await connect(auth, 'slack')
-  }
-
-  it('answers url_verification', async () => {
-    expect(await (await send({ type: 'url_verification', challenge: 'c-1' })).json()).toEqual({ challenge: 'c-1' })
-  })
-
-  it('routes signed events by authorization team and user', async () => {
-    const { auth } = await registerDevice()
-    await connectSlack(auth)
-    const payload = { type: 'event_callback', authorizations: [{ team_id: 'T1', user_id: 'U1' }], event: { type: 'message', text: 'hi <@U1>' } }
-    expect(await (await send(payload)).json()).toEqual({ delivered: 1 })
-    expect((await inbox(auth)).at(-1)!.payload).toEqual({ kind: 'slack.event', payload })
-  })
-
-  it('ignores a retried event_id', async () => {
-    const { auth } = await registerDevice()
-    await connectSlack(auth)
-    const payload = { type: 'event_callback', event_id: 'Ev1', authorizations: [{ team_id: 'T1', user_id: 'U1' }], event: { type: 'message' } }
-    expect(await (await send(payload)).json()).toEqual({ delivered: 1 })
-    expect(await (await send(payload)).json()).toEqual({ delivered: 0 })
-    expect((await inbox(auth)).filter((i) => i.payload.kind === 'slack.event')).toHaveLength(1)
-  })
-
-  it('rejects a bad signature', async () => {
-    expect((await send({ type: 'url_verification', challenge: 'x' }, { secret: 'wrong' })).status).toBe(401)
-  })
-
-  it('rejects a replayed request older than 5 minutes', async () => {
-    expect((await send({ type: 'url_verification', challenge: 'x' }, { ts: Math.floor(Date.now() / 1000) - 301 })).status).toBe(401)
   })
 })

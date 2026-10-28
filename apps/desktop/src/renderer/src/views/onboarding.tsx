@@ -4,10 +4,10 @@ import { useApp } from '../app'
 import { api } from '../bridge'
 import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon, Tag } from '../ui'
 import { useBrowserAuth } from './connections'
-import { AgentSettings, AiSettings, WorkspaceCleanupRow } from './preferences'
+import { AgentSettings, WorkspaceCleanupRow } from './preferences'
 
-const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups' } as const
-const STEPS = ['You', 'Inputs', 'Agents', 'AI'] as const
+const HINTS = { github: 'Pull requests, issues, and alerts' } as const
+const STEPS = ['You', 'Inputs', 'Agents'] as const
 
 export function Onboarding() {
   const app = useApp()
@@ -114,15 +114,6 @@ export function Onboarding() {
           </div>
           <AgentSettings />
           <WorkspaceCleanupRow />
-        </div>
-      ),
-    },
-    AI: {
-      title: 'AI checks',
-      sub: 'Optional. Detects Slack replies owed and follow-ups. Calls go directly from this Mac.',
-      body: (
-        <div className="rows">
-          <AiSettings />
         </div>
       ),
     },

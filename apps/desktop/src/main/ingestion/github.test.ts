@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyReconciliation, apiUrlFor, currentFromSearch, eachLimit, githubRepositories, githubWebhook, mentionResolution, mentions, nextLink, reconcileGithub } from './github'
-import { connectedCtx, fakeDeps, grantFor, NOW, res, routeFetch } from './testing'
+import { connectedCtx, fakeDeps, grantFor, res, routeFetch } from './testing'
 
 const ME = { id: '1', login: 'lucas' }
 const repository = { full_name: 'acme/app' }

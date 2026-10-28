@@ -1,6 +1,5 @@
 import { writeFile } from 'node:fs/promises'
 import {
-  SECRET_KEYS,
   unique,
   type ActivityEvent,
   type AgentProvider,
@@ -130,8 +129,6 @@ export function createApi(deps: ApiDeps): GantryApi {
       async setTrigger(trigger, enabled) {
         updateSettings({ triggers: { [trigger]: enabled } as Settings['triggers'] })
       },
-      setLlmKey: async (key) => (key.trim() ? deps.secrets.set(SECRET_KEYS.llmApiKey, key.trim()) : deps.secrets.delete(SECRET_KEYS.llmApiKey)),
-      hasLlmKey: async () => !!deps.secrets.get(SECRET_KEYS.llmApiKey),
       async chooseWorkspaceLocation() {
         const path = await platform.chooseDirectory('Choose workspace location')
         if (path) updateSettings({ workspaceLocation: path })
@@ -216,7 +213,7 @@ export function createApi(deps: ApiDeps): GantryApi {
         if (remoteError)
           await platform.alert(
             'Remote data could not be deleted',
-            `Local data was deleted, but the Gantry Worker did not confirm deleting your account (${remoteError.message}). Revoke Gantry's GitHub and Slack access from those services to cut it off.`,
+            `Local data was deleted, but the Gantry Worker did not confirm deleting your account (${remoteError.message}). Revoke Gantry's GitHub access from GitHub to cut it off.`,
           )
         platform.relaunch()
       },
