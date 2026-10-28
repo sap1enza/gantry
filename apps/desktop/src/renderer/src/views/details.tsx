@@ -1,9 +1,9 @@
 import { actionsFor, isAgentActive, isCustomColumn, type Actionable, type Column, type ActivityEvent, type AgentEvent, type TranscriptEntry } from '@gantry/shared'
-import { ArrowUpRight, ExternalLink, FileText, GitPullRequest, PanelRightClose } from 'lucide-react'
+import { ChevronRight, ExternalLink, FileText, GitPullRequest, List, PanelRightClose, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, Modal, PRESET_LABEL, SOURCE_LABELS, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
+import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, SOURCE_LABELS, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
 
 export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
@@ -42,33 +42,42 @@ export function DetailsPanel({ id }: { id: string }) {
   const [fetched, setFetched] = useState<Actionable>()
   const card = fetched?.id === id ? fetched : undefined
   const [events, setEvents] = useState<ActivityEvent[]>([])
-  const [live, setLive] = useState<{ at: string; text: string }[]>([])
+  const [log, setLog] = useState<ActivityEvent[]>([])
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
+  const [side, setSide] = useState<'transcript' | 'log'>()
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState('')
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>()
 
   const version = app.snapshot?.actionables.find((a) => a.id === id)?.updatedAt
   const fetchCard = useCallback(() => void api.board.get(id).then((c) => c && setFetched((prev) => (prev?.id === c.id && prev.updatedAt > c.updatedAt ? prev : c))), [id])
   useEffect(() => {
-    setLive([])
     setAnswer('')
     setFeedback('')
     setEvents([])
+    setTranscript([])
+    setSide(undefined)
     let current = true
-    void api.activity.list({ actionableId: id, limit: 6 }).then((log) => current && setEvents(log.events))
+    void api.activity.list({ actionableId: id, limit: 3 }).then((log) => current && setEvents(log.events))
+    void api.board.transcript(id).then((t) => current && setTranscript(t))
     return () => {
       current = false
     }
   }, [id])
   useEffect(fetchCard, [fetchCard, version])
   usePush('board.changed', () => !version && fetchCard())
-  usePush('activity.appended', ({ event }) => event.actionableId === id && setEvents((list) => [event, ...list].slice(0, 6)))
-  usePush('agent.event', ({ actionableId, event }) => {
-    const text = actionableId === id && describeAgentEvent(event)
-    if (text) setLive((list) => [{ at: new Date().toISOString(), text }, ...list].slice(0, 20))
+  usePush('activity.appended', ({ event }) => {
+    if (event.actionableId !== id) return
+    setEvents((list) => [event, ...list].slice(0, 3))
+    setLog((list) => [event, ...list])
   })
+  usePush('agent.event', ({ actionableId, event }) => actionableId === id && event.type !== 'raw' && setTranscript((list) => [...list, { at: new Date().toISOString(), event }]))
+  const openLog = async () => {
+    setLog((await api.activity.list({ actionableId: id, limit: 200 })).events)
+    setSide('log')
+  }
 
   if (!card) return <aside className="panel" />
+  const messages = transcript.filter((t) => t.event.type === 'message').slice(-3)
   const actions = actionsFor(card)
   const d = card.dispatch
   const r = card.result
@@ -82,203 +91,235 @@ export function DetailsPanel({ id }: { id: string }) {
   }
 
   return (
-    <aside className="panel" aria-label="Actionable details">
-      <div className="row">
-        <span className="eyebrow">Actionable · {card.displayId}</span>
-        <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close panel" onClick={app.closePanel}>
-          <PanelRightClose size={14} />
-        </button>
-      </div>
-      <div className="row">
-        <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card, app.snapshot?.columns)}</Tag>
-        <span className="small muted" style={{ marginLeft: 'auto' }}>
-          Created {clock(card.createdAt)}
-        </span>
-      </div>
-      <h2 className="selectable">{card.title}</h2>
-      <div className="row small">
-        <SourceIcon kind={card.source.kind} />
-        <span style={{ fontSize: 12 }}>{card.source.name}</span>
-        <Tag>{card.source.kind === 'api' ? 'Custom API source' : SOURCE_LABELS[card.source.kind]}</Tag>
-        <PriorityTag priority={card.priority} />
-      </div>
-      {card.tags.length > 0 && (
-        <div className="row wrap" style={{ gap: 6 }}>
-          {card.tags.map((t) => (
-            <Tag key={t}>{t}</Tag>
-          ))}
-        </div>
-      )}
-      {card.body && <Markdown source={card.body} onLink={openLink} />}
-      {card.links.length > 0 && (
-        <div className="col" style={{ gap: 9 }}>
-          {card.links.map((l) => (
-            <a key={l.url} className="card-link" style={{ fontSize: 12 }} href={l.url} onClick={(e) => (e.preventDefault(), openLink(l.url))}>
-              {/github\.com\/.+\/pull\//.test(l.url) ? <GitPullRequest size={12} /> : <ExternalLink size={12} />}
-              <span className="truncate">{l.label}</span>
-            </a>
-          ))}
-        </div>
-      )}
-
-      {q && (
-        <div className="question" role="group" aria-label="Agent question">
-          <b>Agent needs input</b>
-          <span>{q.prompt}</span>
-          {q.options && (
-            <div className="row wrap" style={{ gap: 6 }}>
-              {q.options.map((o) => (
-                <button key={o} className="btn sm" onClick={() => sendAnswer(o)}>
-                  {o}
-                </button>
+    <>
+      {side && (
+        <aside className="panel side-panel" aria-label={side === 'log' ? 'Activity log' : 'Transcript'}>
+          <div className="row">
+            <span className="eyebrow">
+              {side === 'log' ? 'Activity log' : 'Transcript'} · {card.displayId}
+            </span>
+            <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close" onClick={() => setSide(undefined)}>
+              <X size={14} />
+            </button>
+          </div>
+          {side === 'transcript' ? (
+            <div className="transcript">
+              {transcript.length === 0 && <span className="muted">No transcript events recorded yet.</span>}
+              {transcript.map((t, i) => (
+                <div key={i}>
+                  <span className="faint">{clockSeconds(t.at)}</span> <b>{t.event.type}</b> {describeAgentEvent(t.event) ?? JSON.stringify(t.event)}
+                </div>
               ))}
             </div>
+          ) : (
+            <ul className="timeline" style={{ margin: 0 }}>
+              {log.map((e) => (
+                <li key={e.id}>
+                  {e.title}
+                  {e.detail && <div className="muted selectable">{e.detail}</div>}
+                  <span className="mono">{clock(e.createdAt)}</span>
+                </li>
+              ))}
+              {!log.length && <li className="muted">No activity yet</li>}
+            </ul>
           )}
-          <textarea className="field" rows={2} placeholder="Type an answer…" value={answer} onChange={(e) => setAnswer(e.target.value)} />
-          <div className="row">
-            <button className="btn sm primary" style={{ marginLeft: 'auto' }} disabled={!answer.trim()} onClick={() => sendAnswer(answer)}>
-              Send answer
-            </button>
-          </div>
-        </div>
+        </aside>
       )}
-
-      {d && (
-        <section>
-          <div className="row">
-            <h3>Agent dispatch</h3>
-            <span className="small muted" style={{ marginLeft: 'auto' }}>
-              Started by {d.startedBy}
-            </span>
-          </div>
-          <dl className="kv">
-            <dt>Agent</dt>
-            <dd>{PROVIDER_LABEL[d.provider] ?? d.provider}{d.model ? ` · ${d.model[0]!.toUpperCase()}${d.model.slice(1)}` : ''}</dd>
-            <dt>Repository</dt>
-            <dd>{d.repository}</dd>
-            <dt>Workspace</dt>
-            <dd className="mono selectable">{d.worktreePath}</dd>
-            <dt>Permissions</dt>
-            <dd>{PRESET_LABEL[d.permissionPreset]}</dd>
-          </dl>
-          <div className="box">
-            <span className="eyebrow">Instructions</span>
-            <span className="selectable" style={{ whiteSpace: 'pre-wrap' }}>{d.instructions}</span>
-          </div>
-        </section>
-      )}
-
-      {(r || card.error) && (
-        <section>
-          <h3>Result</h3>
-          {card.error && <div className="tag red" style={{ height: 'auto', padding: 6 }}>{card.error}</div>}
-          {r && (
-            <>
-              <Markdown source={r.summary} onLink={openLink} />
-              <dl className="kv">
-                {(
-                  [
-                    ['Files', r.filesChanged.length > 0 && <span className="mono">{r.filesChanged.map((f) => <div key={f}>{f}</div>)}</span>],
-                    ['Branch', r.branch && <span className="mono">{r.branch}</span>],
-                    ['Pull request', r.prUrl && <a href={r.prUrl} onClick={(e) => (e.preventDefault(), openLink(r.prUrl!))}>{r.prUrl.replace(/^https:\/\/github\.com\//, '')}</a>],
-                    ['Tests', r.testsRun],
-                    ['Cost', d && `$${d.costUsd.toFixed(2)} · ${Math.round(d.inputTokens / 1000)}k in / ${(d.outputTokens / 1000).toFixed(1)}k out`],
-                  ] as [string, ReactNode][]
-                )
-                  .filter(([, v]) => v)
-                  .map(([label, v]) => (
-                    <Fragment key={label}>
-                      <dt>{label}</dt>
-                      <dd>{v}</dd>
-                    </Fragment>
-                  ))}
-              </dl>
-              {r.openQuestions.length > 0 && (
-                <div className="box">
-                  <span className="eyebrow">Open questions</span>
-                  {r.openQuestions.map((oq) => (
-                    <span key={oq}>{oq}</span>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
-
-      <section>
+      <aside className="panel" aria-label="Actionable details">
         <div className="row">
-          <h3>Latest activity</h3>
-          <a className="small" style={{ marginLeft: 'auto' }} onClick={() => app.go('activity', { activityCard: card.id })}>
-            View log <ArrowUpRight size={11} />
-          </a>
-        </div>
-        <ul className="timeline" style={{ margin: 0 }}>
-          {live.map((l, i) => (
-            <li key={`live-${i}`}>
-              {l.text}
-              <span className="mono">{clockSeconds(l.at)} · live</span>
-            </li>
-          ))}
-          {events.map((e) => (
-            <li key={e.id}>
-              {e.title}
-              <span className="mono">{clockSeconds(e.createdAt)}</span>
-            </li>
-          ))}
-          {!live.length && !events.length && <li className="muted">No activity yet</li>}
-        </ul>
-        {d && (
-          <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={async () => setTranscript(await api.board.transcript(card.id))}>
-            <FileText size={12} /> Open transcript
+          <span className="eyebrow">Actionable · {card.displayId}</span>
+          <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close panel" onClick={app.closePanel}>
+            <PanelRightClose size={14} />
           </button>
-        )}
-      </section>
-
-      {reopening && (
-        <section>
-          <h3>Reopen with feedback</h3>
-          <textarea className="field" rows={3} autoFocus placeholder="What should the agent change?" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
-          <div className="row">
-            <button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
-              Cancel
-            </button>
-            <button
-              className="btn sm primary"
-              onClick={async () => {
-                await app.run(api.board.reopen(card.id, feedback.trim() || undefined))
-                app.setReopenFor(undefined)
-              }}
-            >
-              Reopen and resume
-            </button>
-          </div>
-        </section>
-      )}
-
-      {actions.length > 0 && (
-        <div className="col" style={{ gap: 10 }}>
-          <div className="row wrap" style={{ gap: 8 }}>
-            {actions.map((a) => (
-              <ActionButton key={a} action={a} large onClick={(el) => app.act(a, card, el)} />
-            ))}
-          </div>
-          {isAgentActive(card) && <span className="small muted">Pause or stop the agent before snoozing.</span>}
         </div>
-      )}
-
-      {transcript && (
-        <Modal title={`Transcript · ${card.displayId}`} wide onClose={() => setTranscript(undefined)} footer={<button className="btn" onClick={() => setTranscript(undefined)}>Close</button>}>
-          <div className="transcript">
-            {transcript.length === 0 && <span className="muted">No transcript events recorded yet.</span>}
-            {transcript.map((t, i) => (
-              <div key={i}>
-                <span className="faint">{clockSeconds(t.at)}</span> <b>{t.event.type}</b> {describeAgentEvent(t.event) ?? JSON.stringify(t.event)}
-              </div>
+        <div className="row">
+          <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card, app.snapshot?.columns)}</Tag>
+          <span className="small muted" style={{ marginLeft: 'auto' }}>
+            Created {clock(card.createdAt)}
+          </span>
+        </div>
+        <h2 className="selectable">{card.title}</h2>
+        <div className="row small">
+          <SourceIcon kind={card.source.kind} />
+          <span style={{ fontSize: 12 }}>{card.source.name}</span>
+          <Tag>{card.source.kind === 'api' ? 'Custom API source' : SOURCE_LABELS[card.source.kind]}</Tag>
+          <PriorityTag priority={card.priority} />
+        </div>
+        {card.tags.length > 0 && (
+          <div className="row wrap" style={{ gap: 6 }}>
+            {card.tags.map((t) => (
+              <Tag key={t}>{t}</Tag>
             ))}
           </div>
-        </Modal>
-      )}
-    </aside>
+        )}
+        {card.body && <Markdown source={card.body} onLink={openLink} />}
+        {card.links.length > 0 && (
+          <div className="col" style={{ gap: 9 }}>
+            {card.links.map((l) => (
+              <a key={l.url} className="card-link" style={{ fontSize: 12 }} href={l.url} onClick={(e) => (e.preventDefault(), openLink(l.url))}>
+                {/github\.com\/.+\/pull\//.test(l.url) ? <GitPullRequest size={12} /> : <ExternalLink size={12} />}
+                <span className="truncate">{l.label}</span>
+              </a>
+            ))}
+          </div>
+        )}
+
+        {q && (
+          <div className="question" role="group" aria-label="Agent question">
+            <b>Agent needs input</b>
+            <span>{q.prompt}</span>
+            {q.options && (
+              <div className="row wrap" style={{ gap: 6 }}>
+                {q.options.map((o) => (
+                  <button key={o} className="btn sm" onClick={() => sendAnswer(o)}>
+                    {o}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea className="field" rows={2} placeholder="Type an answer…" value={answer} onChange={(e) => setAnswer(e.target.value)} />
+            <div className="row">
+              <button className="btn sm primary" style={{ marginLeft: 'auto' }} disabled={!answer.trim()} onClick={() => sendAnswer(answer)}>
+                Send answer
+              </button>
+            </div>
+          </div>
+        )}
+
+        {d && (
+          <details className="collapsible">
+            <summary className="row">
+              <ChevronRight size={13} className="chevron" />
+              <h3>Agent dispatch</h3>
+              <span className="small muted" style={{ marginLeft: 'auto' }}>
+                Started by {d.startedBy}
+              </span>
+            </summary>
+            <dl className="kv">
+              <dt>Agent</dt>
+              <dd>{PROVIDER_LABEL[d.provider] ?? d.provider}{d.model ? ` · ${d.model[0]!.toUpperCase()}${d.model.slice(1)}` : ''}</dd>
+              <dt>Repository</dt>
+              <dd>{d.repository}</dd>
+              <dt>Workspace</dt>
+              <dd className="mono selectable">{d.worktreePath}</dd>
+              <dt>Permissions</dt>
+              <dd>{PRESET_LABEL[d.permissionPreset]}</dd>
+            </dl>
+            <div className="box">
+              <span className="eyebrow">Instructions</span>
+              <span className="selectable" style={{ whiteSpace: 'pre-wrap' }}>{d.instructions}</span>
+            </div>
+          </details>
+        )}
+
+        {(r || card.error) && (
+          <details className="collapsible">
+            <summary className="row">
+              <ChevronRight size={13} className="chevron" />
+              <h3>Result</h3>
+            </summary>
+            {card.error && <div className="tag red" style={{ height: 'auto', padding: 6 }}>{card.error}</div>}
+            {r && (
+              <>
+                <Markdown source={r.summary} onLink={openLink} />
+                <dl className="kv">
+                  {(
+                    [
+                      ['Files', r.filesChanged.length > 0 && <span className="mono">{r.filesChanged.map((f) => <div key={f}>{f}</div>)}</span>],
+                      ['Branch', r.branch && <span className="mono">{r.branch}</span>],
+                      ['Pull request', r.prUrl && <a href={r.prUrl} onClick={(e) => (e.preventDefault(), openLink(r.prUrl!))}>{r.prUrl.replace(/^https:\/\/github\.com\//, '')}</a>],
+                      ['Tests', r.testsRun],
+                      ['Cost', d && `$${d.costUsd.toFixed(2)} · ${Math.round(d.inputTokens / 1000)}k in / ${(d.outputTokens / 1000).toFixed(1)}k out`],
+                    ] as [string, ReactNode][]
+                  )
+                    .filter(([, v]) => v)
+                    .map(([label, v]) => (
+                      <Fragment key={label}>
+                        <dt>{label}</dt>
+                        <dd>{v}</dd>
+                      </Fragment>
+                    ))}
+                </dl>
+                {r.openQuestions.length > 0 && (
+                  <div className="box">
+                    <span className="eyebrow">Open questions</span>
+                    {r.openQuestions.map((oq) => (
+                      <span key={oq}>{oq}</span>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </details>
+        )}
+
+        {d && (
+          <section>
+            <h3>Agent output</h3>
+            <ul className="timeline" style={{ margin: 0 }}>
+              {messages.map((t, i) => (
+                <li key={i}>
+                  <span className="selectable clamp-3">{describeAgentEvent(t.event)}</span>
+                  <span className="mono">{clockSeconds(t.at)}</span>
+                </li>
+              ))}
+              {!messages.length && <li className="muted">No agent messages yet</li>}
+            </ul>
+            <button className={`btn sm ${side === 'transcript' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => setSide(side === 'transcript' ? undefined : 'transcript')}>
+              <FileText size={12} /> Open transcript
+            </button>
+          </section>
+        )}
+
+        <section>
+          <h3>Latest activity</h3>
+          <ul className="timeline" style={{ margin: 0 }}>
+            {events.map((e) => (
+              <li key={e.id}>
+                {e.title}
+                <span className="mono">{clockSeconds(e.createdAt)}</span>
+              </li>
+            ))}
+            {!events.length && <li className="muted">No activity yet</li>}
+          </ul>
+          <button className={`btn sm ${side === 'log' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => (side === 'log' ? setSide(undefined) : void openLog())}>
+            <List size={12} /> View log
+          </button>
+        </section>
+
+        {reopening && (
+          <section>
+            <h3>Reopen with feedback</h3>
+            <textarea className="field" rows={3} autoFocus placeholder="What should the agent change?" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+            <div className="row">
+              <button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
+                Cancel
+              </button>
+              <button
+                className="btn sm primary"
+                onClick={async () => {
+                  await app.run(api.board.reopen(card.id, feedback.trim() || undefined))
+                  app.setReopenFor(undefined)
+                }}
+              >
+                Reopen and resume
+              </button>
+            </div>
+          </section>
+        )}
+
+        {actions.length > 0 && (
+          <div className="col" style={{ gap: 10 }}>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {actions.map((a) => (
+                <ActionButton key={a} action={a} large onClick={(el) => app.act(a, card, el)} />
+              ))}
+            </div>
+            {isAgentActive(card) && <span className="small muted">Pause or stop the agent before snoozing.</span>}
+          </div>
+        )}
+
+      </aside>
+    </>
   )
 }
