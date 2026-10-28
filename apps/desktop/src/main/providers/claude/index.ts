@@ -1,6 +1,6 @@
 import { query as sdkQuery, type CanUseTool, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AskUserQuestionInput } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
-import { errorMessage, type AgentEventSink, type AgentProvider, type AgentState, type DispatchRequest } from '@gantry/shared'
+import { CLAUDE_MODELS, errorMessage, type AgentEventSink, type AgentProvider, type AgentState, type DispatchRequest } from '@gantry/shared'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -148,12 +148,7 @@ export function createClaudeProvider(deps: ClaudeDeps = defaultDeps): AgentProvi
   return {
     id: 'claude',
     displayName: 'Claude Code',
-    models: [
-      { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-      { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-      { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
-      { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-    ],
+    models: CLAUDE_MODELS,
 
     async detect() {
       try {

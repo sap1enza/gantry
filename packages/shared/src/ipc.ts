@@ -153,7 +153,8 @@ export interface GantryApi {
   repos: {
     list(): Promise<Repository[]>
     add(): Promise<Repository | undefined>
-    update(id: string, patch: { setupCommand?: string }): Promise<void>
+    update(id: string, patch: { setupCommand?: string; defaultBranch?: string }): Promise<void>
+    branches(id: string): Promise<string[]>
     remove(id: string): Promise<void>
   }
   account: {

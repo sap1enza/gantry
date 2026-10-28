@@ -1,4 +1,4 @@
-import { LLM_DEFAULT_MODELS, PERMISSION_PRESETS, type LlmProvider, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
+import { CLAUDE_MODELS, LLM_DEFAULT_MODELS, PERMISSION_PRESETS, type LlmProvider, type Repository, type Settings, type WorkspaceCleanup } from '@gantry/shared'
 import { ArrowUpRight, FolderCheck, Mail, Plus, Trash2 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp } from '../app'
@@ -260,6 +260,23 @@ function DeleteAllDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
+function BranchSelect({ repo, onChange }: { repo: Repository; onChange: () => void }) {
+  const app = useApp()
+  const [branches, setBranches] = useState([repo.defaultBranch])
+  useEffect(() => void api.repos.branches(repo.id).then((b) => b.length && setBranches(b)), [repo.id])
+  return (
+    <Select
+      label={`Base branch for ${repo.remote}`}
+      value={repo.defaultBranch}
+      options={branches.map((b) => ({ value: b, label: b }))}
+      onChange={async (defaultBranch) => {
+        await app.run(api.repos.update(repo.id, { defaultBranch }))
+        onChange()
+      }}
+    />
+  )
+}
+
 export function AgentSettings() {
   const app = useApp()
   const s = app.settings
@@ -274,12 +291,8 @@ export function AgentSettings() {
         <Select label="Default agent" value={s.defaultProvider} options={[{ value: 'claude', label: 'Claude Code' }]} onChange={(v) => set({ defaultProvider: v })} />
         <Select
           label="Default model"
-          value={s.defaultModel ?? 'sonnet'}
-          options={[
-            { value: 'sonnet', label: 'Sonnet' },
-            { value: 'opus', label: 'Opus' },
-            { value: 'haiku', label: 'Haiku' },
-          ]}
+          value={s.defaultModel}
+          options={CLAUDE_MODELS.map((m) => ({ value: m.id, label: m.label }))}
           onChange={(v) => set({ defaultModel: v })}
         />
       </Row>
@@ -299,7 +312,7 @@ export function AgentSettings() {
         <div className="row">
           <div className="grow">
             <b>Registered repositories</b>
-            <p>Local clones agents work in. The setup command runs inside each new worktree; a non-zero exit fails the dispatch.</p>
+            <p>Local clones agents work in. New worktrees branch from the selected base branch, fetched from origin first. The setup command runs inside each new worktree; a non-zero exit fails the dispatch.</p>
           </div>
           <button
             className="btn"
@@ -315,10 +328,9 @@ export function AgentSettings() {
           <div key={r.id} className="row" style={{ gap: 10 }}>
             <div style={{ width: 210 }}>
               <div style={{ fontWeight: 600 }}>{r.remote}</div>
-              <div className="mono faint">
-                {r.path} · {r.defaultBranch}
-              </div>
+              <div className="mono faint">{r.path}</div>
             </div>
+            <BranchSelect repo={r} onChange={loadRepos} />
             <input
               className="field grow mono"
               placeholder="Setup command, e.g. cp ../../.env . && pnpm i"

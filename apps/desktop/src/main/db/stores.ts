@@ -123,6 +123,9 @@ export function createRepositoryStore(db: Db) {
     setSetupCommand(id: string, setupCommand?: string) {
       db.prepare('UPDATE repositories SET setup_command = ? WHERE id = ?').run(setupCommand?.trim() || null, id)
     },
+    setDefaultBranch(id: string, branch: string) {
+      db.prepare('UPDATE repositories SET default_branch = ? WHERE id = ?').run(branch, id)
+    },
     remove(id: string) {
       db.prepare('DELETE FROM repositories WHERE id = ?').run(id)
     },

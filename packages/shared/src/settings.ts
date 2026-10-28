@@ -17,10 +17,17 @@ export interface CardFieldVisibility {
   priority: boolean
 }
 
+export const CLAUDE_MODELS = [
+  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+]
+
 export interface Settings {
   workerUrl: string
   defaultProvider: string
-  defaultModel?: string
+  defaultModel: string
   workspaceLocation: string
   defaultPermissionPreset: PermissionPreset
   confirmBeforeDispatch: boolean
@@ -53,6 +60,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   workerUrl: 'https://gantry-api.sapienzalucas.workers.dev',
   defaultProvider: 'claude',
+  defaultModel: 'claude-sonnet-5-5',
   workspaceLocation: '~/Developer/Gantry',
   defaultPermissionPreset: 'edit_test',
   confirmBeforeDispatch: true,

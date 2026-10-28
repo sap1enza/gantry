@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import {
   SECRET_KEYS,
+  unique,
   type ActivityEvent,
   type AgentProvider,
   type GantryApi,
@@ -154,7 +155,16 @@ export function createApi(deps: ApiDeps): GantryApi {
         board.repositoryRegistered()
         return repo
       },
-      update: async (id, patch) => repos.setSetupCommand(id, patch.setupCommand),
+      async update(id, patch) {
+        if ('setupCommand' in patch) repos.setSetupCommand(id, patch.setupCommand)
+        if (patch.defaultBranch) repos.setDefaultBranch(id, patch.defaultBranch)
+      },
+      async branches(id) {
+        const repo = repos.list().find((r) => r.id === id)
+        if (!repo) return []
+        const refs = await git(deps.exec, repo.path, 'for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes/origin')
+        return unique(refs.output.split('\n').map((r) => r.trim().replace(/^origin\//, '')).filter((r) => r && r !== 'HEAD' && r !== 'origin')).sort()
+      },
       remove: async (id) => repos.remove(id),
     },
     account: {

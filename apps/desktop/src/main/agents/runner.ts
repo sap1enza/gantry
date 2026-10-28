@@ -51,6 +51,8 @@ export function buildInstructions(a: Actionable, context?: string) {
   return [...parts, COMPLETION_INSTRUCTIONS].filter(Boolean).join('\n\n')
 }
 
+const defaultModel = (provider: AgentProvider, model: string) => (provider.models.some((m) => m.id === model) ? model : provider.models[0]?.id)
+
 export const slugify = (title: string) =>
   title
     .toLowerCase()
@@ -125,7 +127,7 @@ export class AgentRunner implements AgentControl {
       repository: repo?.remote,
       repositoryCandidates: repos.map((r) => r.remote),
       provider: s.defaultProvider,
-      model: s.defaultModel ?? provider?.models[0]?.id,
+      model: provider && defaultModel(provider, s.defaultModel),
       models: provider?.models ?? [],
       permissionPreset: s.defaultPermissionPreset,
       fullPresetAvailable,
@@ -161,7 +163,7 @@ export class AgentRunner implements AgentControl {
     const dispatch: Dispatch = {
       id: randomUUID(),
       provider: provider.id,
-      model: overrides.model ?? s.defaultModel ?? provider.models[0]?.id,
+      model: overrides.model ?? defaultModel(provider, s.defaultModel),
       repository: repo.remote,
       repositoryPath: repo.path,
       worktreePath: reuse?.worktreePath ?? join(expandHome(s.workspaceLocation, this.deps.home ?? homedir()), slug),
@@ -252,17 +254,17 @@ export class AgentRunner implements AgentControl {
     await this.createWorktree(a, d)
   }
 
+  private async baseRef(repositoryPath: string, branch?: string) {
+    if (!branch) return 'HEAD'
+    await git(this.deps.exec, repositoryPath, 'fetch', 'origin', branch)
+    const remote = `origin/${branch}`
+    return (await git(this.deps.exec, repositoryPath, 'rev-parse', '--verify', '--quiet', `refs/remotes/${remote}`)).code === 0 ? remote : branch
+  }
+
   private async createWorktree(a: Actionable, d: Dispatch) {
     const repo = this.deps.repositories().find((r) => r.path === d.repositoryPath)
     const branchExists = (await git(this.deps.exec, d.repositoryPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${d.branch}`)).code === 0
-    const added = await git(
-      this.deps.exec,
-      d.repositoryPath,
-      'worktree',
-      'add',
-      d.worktreePath,
-      ...(branchExists ? [d.branch] : ['-b', d.branch, repo?.defaultBranch ?? 'HEAD']),
-    )
+    const added = await git(this.deps.exec, d.repositoryPath, 'worktree', 'add', d.worktreePath, ...(branchExists ? [d.branch] : ['-b', d.branch, await this.baseRef(d.repositoryPath, repo?.defaultBranch)]))
     if (added.code !== 0) throw new Error(`git worktree add failed: ${added.output.trim()}`)
     if (!repo?.setupCommand) return
     const setup = await this.deps.exec(...shellCommand(repo.setupCommand), d.worktreePath)

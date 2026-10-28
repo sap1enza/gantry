@@ -46,6 +46,15 @@ describe('worktrees', () => {
     expect(s.board.transcript(id).map((e) => e.event.type)).toEqual(['tool'])
   })
 
+  it('branches new worktrees from the fetched origin copy of the selected base branch', async () => {
+    const s = setup()
+    s.repos.setDefaultBranch(s.repo.id, 'develop')
+    s.execResults['refs/remotes/origin/develop'] = { code: 0, output: '' }
+    await started(s)
+    expect(s.execCalls).toContainEqual(['git', '-C', '/code/api', 'fetch', 'origin', 'develop'])
+    expect(s.execCalls).toContainEqual(['git', '-C', '/code/api', 'worktree', 'add', '/Users/me/Developer/Gantry/GT-001-fix-ci-1', '-b', 'gantry/GT-001-fix-ci-1', 'origin/develop'])
+  })
+
   it('fails the dispatch before the agent starts when setup exits non-zero', async () => {
     const s = setup()
     s.repos.setSetupCommand(s.repo.id, 'false')
