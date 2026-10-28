@@ -572,7 +572,8 @@ export class Board implements IngestSink {
       .filter(
         (a) =>
           (!filter.sources?.length || filter.sources.includes(a.source.name) || filter.sources.includes(a.source.kind)) &&
-          (!filter.providers?.length || (!!a.dispatch && filter.providers.includes(a.dispatch.provider))),
+          (!filter.providers?.length || (!!a.dispatch && filter.providers.includes(a.dispatch.provider))) &&
+          (!filter.tags?.length || a.tags.some((t) => filter.tags!.includes(t))),
       )
       .sort(compareCards)
     const today = this.startOfToday()

@@ -43,6 +43,14 @@ describe('ingest dedupe', () => {
     expect(() => board.edit(id!, { title: '  ' })).toThrow('Title is required')
   })
 
+  it('filters the snapshot by any selected tag', () => {
+    const { board } = setup()
+    const { actionableId: id } = board.ingest(signal())
+    board.create({ title: 'Untagged' })
+    board.edit(id!, { tags: ['bug'] })
+    expect(board.snapshot({ tags: ['bug', 'other'] }).actionables.map((a) => a.id)).toEqual([id])
+  })
+
   it('keeps user edits and removed tags when the source signals again', () => {
     const { board } = setup()
     const { actionableId: id } = board.ingest(signal({ tags: ['issue'] }))

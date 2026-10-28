@@ -26,6 +26,7 @@ export interface BoardSnapshot {
 export interface BoardFilter {
   sources?: string[]
   providers?: string[]
+  tags?: string[]
   showSnoozed?: boolean
   showDismissed?: boolean
   showArchived?: boolean

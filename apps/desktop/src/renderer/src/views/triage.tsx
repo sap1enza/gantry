@@ -210,6 +210,11 @@ function Toolbar() {
   const f = app.filter
   const srcPop = usePopover()
   const agentPop = usePopover()
+  const tagPop = usePopover()
+  const seenTags = useRef(new Set<string>())
+  for (const a of app.snapshot?.actionables ?? []) for (const t of a.tags) seenTags.current.add(t)
+  const tags = f.tags ?? []
+  const setTags = (next: string[]) => app.setFilter({ ...f, tags: next.length ? next : undefined })
   const [refreshedAt, setRefreshedAt] = useState(new Date().toISOString())
   useNow(30_000)
   const sources = f.sources ?? []
@@ -256,6 +261,23 @@ function Toolbar() {
               <SquareTerminal size={13} /> {label}
             </button>
           ))}
+        </Popover>
+      )}
+      <button className="btn sm" onClick={(e) => tagPop.toggle(e.currentTarget)}>
+        <ChevronDown size={12} />
+        {tags.length === 0 ? 'All tags' : tags.length === 1 ? tags[0] : `${tags.length} tags`}
+      </button>
+      {tagPop.anchor && (
+        <Popover anchor={tagPop.anchor} onClose={tagPop.close}>
+          <button className={`menu-item ${tags.length === 0 ? 'active' : ''}`} onClick={() => setTags([])}>
+            All tags
+          </button>
+          {[...seenTags.current].sort().map((t) => (
+            <label key={t} className="menu-item check">
+              <input type="checkbox" checked={tags.includes(t)} onChange={() => setTags(toggle(tags, t))} /> {t}
+            </label>
+          ))}
+          {seenTags.current.size === 0 && <span className="menu-item muted">No tags yet</span>}
         </Popover>
       )}
       <Select style={{ height: 25, fontSize: 11 }} label="Sort" value={app.sort} options={SORTS} onChange={app.setSort} />
