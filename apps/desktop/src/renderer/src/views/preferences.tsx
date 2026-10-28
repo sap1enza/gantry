@@ -5,7 +5,7 @@ import { useApp } from '../app'
 import { api } from '../bridge'
 import { SHORTCUT_LIST } from '../lib/shortcuts'
 import { SNOOZE_PRESETS } from '../lib/snooze'
-import { Github, Modal, PRESET_LABEL, Select, Tag, Toggle } from '../ui'
+import { Github, Modal, Popover, PRESET_LABEL, Select, Tag, Toggle, usePopover } from '../ui'
 import { useBrowserAuth } from './connections'
 
 export function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
@@ -259,18 +259,36 @@ function DeleteAllDialog({ onClose }: { onClose: () => void }) {
 
 function BranchSelect({ repo, onChange }: { repo: Repository; onChange: () => void }) {
   const app = useApp()
+  const pop = usePopover()
   const [branches, setBranches] = useState([repo.defaultBranch])
+  const [query, setQuery] = useState('')
   useEffect(() => void api.repos.branches(repo.id).then((b) => b.length && setBranches(b)), [repo.id])
+  const matches = branches.filter((b) => b.toLowerCase().includes(query.trim().toLowerCase()))
+  const pick = async (defaultBranch: string) => {
+    pop.close()
+    setQuery('')
+    await app.run(api.repos.update(repo.id, { defaultBranch }))
+    onChange()
+  }
   return (
-    <Select
-      label={`Base branch for ${repo.remote}`}
-      value={repo.defaultBranch}
-      options={branches.map((b) => ({ value: b, label: b }))}
-      onChange={async (defaultBranch) => {
-        await app.run(api.repos.update(repo.id, { defaultBranch }))
-        onChange()
-      }}
-    />
+    <>
+      <button className="select branch-select" aria-label={`Base branch for ${repo.remote}`} onClick={(e) => pop.toggle(e.currentTarget)}>
+        {repo.defaultBranch}
+      </button>
+      {pop.anchor && (
+        <Popover anchor={pop.anchor} onClose={pop.close} align="right">
+          <input className="field" autoFocus placeholder="Search branches" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && matches[0] && pick(matches[0])} />
+          <div className="branch-list">
+            {matches.map((b) => (
+              <button key={b} className={`menu-item ${b === repo.defaultBranch ? 'active' : ''}`} onClick={() => pick(b)}>
+                {b}
+              </button>
+            ))}
+            {!matches.length && <div className="menu-label">No matching branches</div>}
+          </div>
+        </Popover>
+      )}
+    </>
   )
 }
 

@@ -164,6 +164,9 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); margi
 .menu-item:hover:not(:disabled), .menu-item.active { background: var(--bg-muted); }
 .menu-item:disabled { opacity: 0.45; cursor: default; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.branch-select { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.branch-list { max-height: 148px; overflow: auto; margin-top: 4px; width: 240px; }
+.branch-list .menu-item { flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; line-height: 28px; }
 .menu-label { font-size: 10px; color: var(--text-faint); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 7px; font-size: 12px; z-index: 80; box-shadow: var(--shadow); }
 
