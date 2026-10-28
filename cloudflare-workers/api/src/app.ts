@@ -254,7 +254,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     await Promise.allSettled(
       results.map(async (row) => {
         const grant = await decryptGrant(c.env, row)
-        await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken, grant.refreshToken)
+        await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken)
       }),
     )
     await deleteUser(c.env.DB, userId).run()
@@ -427,7 +427,7 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
     const row = await findGrant(c)
     if (!row) return c.body(null, 204)
     const grant = await decryptGrant(c.env, row)
-    await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken, grant.refreshToken).catch(console.error)
+    await revokeGrant(fetchImpl, c.env, row.provider, grant.accessToken).catch(console.error)
     await c.env.DB.prepare('DELETE FROM grants WHERE user_id = ? AND provider = ?').bind(row.user_id, row.provider).run()
     return c.body(null, 204)
   })

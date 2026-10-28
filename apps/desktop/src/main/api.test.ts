@@ -131,8 +131,8 @@ describe('api follow-ups', () => {
     const disconnect = vi.fn(async () => undefined)
     const markSourceDisconnected = vi.spyOn(s.board, 'markSourceDisconnected')
     const { gantry } = api(s, undefined, { disconnect })
-    await gantry.connections.disconnect('google')
-    expect(disconnect).toHaveBeenCalledWith('google')
+    await gantry.connections.disconnect('slack')
+    expect(disconnect).toHaveBeenCalledWith('slack')
     expect(markSourceDisconnected).not.toHaveBeenCalled()
   })
 

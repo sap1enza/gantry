@@ -1,16 +1,15 @@
-import { GMAIL_CATEGORIES, TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
-import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, Mail, RefreshCw, Send, ShieldCheck, Webhook, X } from 'lucide-react'
+import { TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
+import { Activity, ArrowUpRight, Copy, ExternalLink, Hash, Info, KeyRound, RefreshCw, Send, ShieldCheck, Webhook, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ago, clock, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
+import { ago, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
 
 const STATUS_LABEL = { connected: 'Connected', reconnect_required: 'Reconnect required', disconnected: 'Disconnected' } as const
 const TRIGGER_HINT: Partial<Record<TriggerId, string>> = {
   'slack.mention': 'Messages that mention you directly.',
   'slack.unreplied': 'An LLM checks whether a mention still needs your reply.',
   'slack.follow_up': 'An LLM finds answered threads with a remaining next step.',
-  'email.new': 'Create an actionable for incoming messages in your inbox.',
 }
 const LLM_TRIGGERS = new Set<TriggerId>(['slack.unreplied', 'slack.follow_up'])
 const SEVERITIES = (['low', 'medium', 'high', 'critical'] as const).map((v) => ({ value: v, label: `≥ ${v}` }))
@@ -21,7 +20,7 @@ const ISSUE_SCOPES = [
 const UNREPLIED_MINUTES = [15, 30, 60, 120, 240].map((m) => ({ value: String(m), label: `${m} minutes` }))
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 
-type ListSection = 'slack' | 'email'
+type ListSection = 'slack'
 type Section = 'github' | ListSection
 
 function useSection<K extends Section>(settings: Settings, key: K) {
@@ -102,7 +101,6 @@ export function ConnectionsView() {
         <div className="grid2">
           <GithubCard info={by('github')} settings={s} />
           <SlackCard info={by('slack')} settings={s} />
-          <EmailCard info={by('google')} settings={s} />
           <ApiCard />
         </div>
         <div className="row small muted" style={{ marginTop: 20 }}>
@@ -258,56 +256,6 @@ function SlackCard({ info, settings }: { info: ConnectionInfo; settings: Setting
           />
           <span className="muted">AI suggestions include the original Slack message so you can verify context before dispatching.</span>
         </div>
-      </ConnHead>
-    </div>
-  )
-}
-
-function EmailCard({ info, settings }: { info: ConnectionInfo; settings: Settings }) {
-  const e = settings.email
-  const setEmail = useSection(settings, 'email')
-  return (
-    <div className="conn">
-      <ConnHead icon={<Mail size={18} />} name="Email" info={info}>
-        <hr />
-        <TriggerRow id="email.new" settings={settings} />
-        <div className="trigger">
-          <span className="grow muted">Mailbox scope</span>
-          <label className="check">
-            <input type="checkbox" checked={e.inboxOnly} onChange={() => setEmail({ inboxOnly: !e.inboxOnly })} /> Inbox only
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={e.unreadOnly} onChange={() => setEmail({ unreadOnly: !e.unreadOnly })} /> Unread only
-          </label>
-        </div>
-        <div className="trigger">
-          <span className="grow muted">Exclude categories</span>
-          {GMAIL_CATEGORIES.map((c) => (
-            <label key={c} className="check">
-              <input type="checkbox" checked={e.excludeCategories.includes(c)} onChange={() => setEmail({ excludeCategories: toggle(e.excludeCategories, c) })} />
-              {c[0]!.toUpperCase() + c.slice(1)}
-            </label>
-          ))}
-        </div>
-        <ListInputs<'email'>
-          rows={[
-            ['domainAllow', 'Only from domains', 'acme.dev, northstar.io'],
-            ['domainDeny', 'Ignore domains', 'newsletter.com'],
-            ['labels', 'Only with labels', 'Clients'],
-          ]}
-          values={e}
-          onSave={setEmail}
-        />
-        <div className="trigger">
-          <div className="grow">
-            <span className="row" style={{ gap: 6 }}>
-              “Needs action” gate <Tag tone="blue">AI detected</Tag>
-            </span>
-            <p>Only create actionables when an LLM decides the email needs action.</p>
-          </div>
-          <Toggle label="Needs action gate" checked={e.llmGate} onChange={(v) => setEmail({ llmGate: v })} />
-        </div>
-        {info.status === 'reconnect_required' && <span className="small muted">Receiving resumes after reconnecting. Last received: {info.lastSyncAt ? clock(info.lastSyncAt) : '—'}.</span>}
       </ConnHead>
     </div>
   )

@@ -33,7 +33,7 @@ export interface CreateActionableResponse {
   url: string
 }
 
-export type OAuthProvider = 'github' | 'slack' | 'google'
+export type OAuthProvider = 'github' | 'slack'
 
 export type InboxPayload =
   | { kind: 'actionable.create'; id: string; tokenName: string; request: CreateActionableRequest }

@@ -206,30 +206,30 @@ describe('tokens and rate limits', () => {
 
   it('refreshes before expiry', async () => {
     const worker = workerWith([])
-    worker.refreshGrant.mockResolvedValue(grantFor('google', { id: 'g', login: 'me' }, 'new'))
+    worker.refreshGrant.mockResolvedValue(grantFor('slack', { id: 'U1', login: 'me' }, 'new'))
     const deps = fakeDeps(worker)
-    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }, 'old', new Date(NOW.getTime() + 60_000).toISOString()))
-    routeFetch([['gmail', () => res({})]])
-    await ctx.json('google', 'https://gmail.googleapis.com/x')
-    expect(worker.refreshGrant).toHaveBeenCalledWith('google', { force: false })
+    const ctx = connectedCtx(deps, grantFor('slack', { id: 'U1', login: 'me' }, 'old', new Date(NOW.getTime() + 60_000).toISOString()))
+    routeFetch([['slack.com', () => res({ ok: true })]])
+    await ctx.json('slack', 'https://slack.com/api/x')
+    expect(worker.refreshGrant).toHaveBeenCalledWith('slack', { force: false })
   })
 
   it('decrypts a grant once, reloads it after a refresh, and forgets it with its retries on disconnect', async () => {
     const worker = workerWith([])
-    worker.refreshGrant.mockResolvedValue(grantFor('google', { id: 'g', login: 'me' }, 'new'))
+    worker.refreshGrant.mockResolvedValue(grantFor('slack', { id: 'U1', login: 'me' }, 'new'))
     const deps = fakeDeps(worker)
-    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }, 'old'))
+    const ctx = connectedCtx(deps, grantFor('slack', { id: 'U1', login: 'me' }, 'old'))
     const read = vi.spyOn(deps.secrets, 'get')
-    const fetch = routeFetch([['gmail', () => res({})]])
-    await ctx.json('google', 'https://gmail.googleapis.com/x')
-    await ctx.json('google', 'https://gmail.googleapis.com/x')
+    const fetch = routeFetch([['slack.com', () => res({ ok: true })]])
+    await ctx.json('slack', 'https://slack.com/api/x')
+    await ctx.json('slack', 'https://slack.com/api/x')
     expect(read).toHaveBeenCalledTimes(1)
-    await ctx.refresh('google', true)
-    await ctx.json('google', 'https://gmail.googleapis.com/x')
+    await ctx.refresh('slack', true)
+    await ctx.json('slack', 'https://slack.com/api/x')
     expect(new Headers(fetch.mock.calls.at(-1)![1]!.headers).get('authorization')).toBe('Bearer new')
-    deps.kv.set('ingestion.retries', { 'gmail:m1': { attempts: 1, retryAt: NOW.getTime() }, 'inbox:1': { attempts: 1, retryAt: NOW.getTime() } })
-    ctx.forget('google', 'gmail:')
-    expect(ctx.account('google')).toBeUndefined()
+    deps.kv.set('ingestion.retries', { 'slack.m1': { attempts: 1, retryAt: NOW.getTime() }, 'inbox:1': { attempts: 1, retryAt: NOW.getTime() } })
+    ctx.forget('slack', 'slack.')
+    expect(ctx.account('slack')).toBeUndefined()
     expect(Object.keys(deps.kv.get('ingestion.retries')!)).toEqual(['inbox:1'])
   })
 
@@ -270,20 +270,11 @@ describe('tokens and rate limits', () => {
     expect(fetch.mock.calls[0]![1]!.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('treats a Gmail 403 rateLimitExceeded as throttling', async () => {
-    const deps = fakeDeps()
-    const ctx = connectedCtx(deps, grantFor('google', { id: 'g', login: 'me' }))
-    const fetch = routeFetch([['gmail', () => res({ error: { code: 403, errors: [{ reason: 'userRateLimitExceeded' }] } }, 403)]])
-    await expect(ctx.json('google', 'https://gmail.googleapis.com/a')).rejects.toBeInstanceOf(ThrottledError)
-    await expect(ctx.json('google', 'https://gmail.googleapis.com/b')).rejects.toBeInstanceOf(ThrottledError)
-    expect(fetch).toHaveBeenCalledTimes(1)
-  })
-
   it('logs ignored:llm with the reason when the LLM is misconfigured, but rethrows transient failures', async () => {
     const deps = fakeDeps()
     deps.secrets.set('llm.apiKey', 'k')
     const ctx = createCtx(deps)
-    const signal = { trigger: 'email.new', source: { kind: 'email', name: 'Gmail' }, externalKey: 't', title: 'x', occurredAt: '' } as const
+    const signal = { trigger: 'slack.unreplied', source: { kind: 'slack', name: 'Slack' }, externalKey: 't', title: 'x', occurredAt: '' } as const
     routeFetch([['api.anthropic.com', () => res({}, 404)]])
     await ctx.emit(signal, { llm: { instruction: 'i', content: 'c' } })
     expect(deps.sink.logIgnored).toHaveBeenCalledWith(signal, 'ignored:llm', 'LLM request failed: HTTP 404')
@@ -294,7 +285,7 @@ describe('tokens and rate limits', () => {
   it('logs ignored:llm when the gate has no API key', async () => {
     const deps = fakeDeps()
     const ctx = createCtx(deps)
-    await ctx.emit({ trigger: 'email.new', source: { kind: 'email', name: 'Gmail' }, externalKey: 't', title: 'x', occurredAt: '' }, { llm: { instruction: 'i', content: 'c' } })
+    await ctx.emit({ trigger: 'slack.unreplied', source: { kind: 'slack', name: 'Slack' }, externalKey: 't', title: 'x', occurredAt: '' }, { llm: { instruction: 'i', content: 'c' } })
     expect(deps.sink.logIgnored.mock.calls[0]![1]).toBe('ignored:llm')
     expect(deps.sink.ingest).not.toHaveBeenCalled()
   })
@@ -321,23 +312,21 @@ describe('createIngestion', () => {
     vi.useFakeTimers()
     const worker = { ...workerWith([]), revokeGrant: vi.fn(async () => undefined) }
     const deps = fakeDeps(worker)
-    deps.secrets.set('grant.google', JSON.stringify(grantFor('google', { id: 'g', login: 'me' })))
+    deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'lucas' })))
     let respond!: (r: Response) => void
-    routeFetch([
-      ['/profile', () => res({ historyId: '9' })],
-      ['/messages?q=', () => new Promise<Response>((r) => (respond = r)) as never],
-    ])
+    routeFetch([['api.github.com', () => new Promise<Response>((r) => (respond = r)) as never]])
     const ingestion = createIngestion(deps)
     ingestion.start()
     await vi.advanceTimersByTimeAsync(0)
-    const disconnected = ingestion.disconnect('google')
+    deps.kv.set('github.active', {})
+    const disconnected = ingestion.disconnect('github')
     await vi.advanceTimersByTimeAsync(0)
     respond(res({}))
     await disconnected
     await vi.advanceTimersByTimeAsync(0)
     ingestion.stop()
     vi.useRealTimers()
-    expect(deps.kv.get('gmail.historyId')).toBeUndefined()
+    expect(deps.kv.get('github.active')).toBeUndefined()
   })
 
   it('keeps polling the inbox while a reconcile job hangs', async () => {
@@ -357,15 +346,14 @@ describe('createIngestion', () => {
   it("runs other providers' jobs while one provider's job hangs", async () => {
     const deps = fakeDeps(workerWith([]))
     deps.secrets.set('grant.github', JSON.stringify(grantFor('github', { id: '1', login: 'lucas' })))
-    deps.secrets.set('grant.google', JSON.stringify(grantFor('google', { id: 'g', login: 'me' })))
+    deps.secrets.set('grant.slack', JSON.stringify(grantFor('slack', { id: 'U1', login: 'me' })))
     routeFetch([
       ['api.github.com', () => new Promise<never>(() => {}) as never],
-      ['/profile', () => res({ historyId: '1' })],
-      ['/messages?', () => res({})],
+      ['slack.com', () => res({ ok: true, messages: { matches: [] } })],
     ])
     const ingestion = createIngestion(deps)
     void ingestion.syncNow()
-    await vi.waitFor(() => expect(ingestion.connections().find((c) => c.provider === 'google')?.lastSyncAt).toBeDefined())
+    await vi.waitFor(() => expect(ingestion.connections().find((c) => c.provider === 'slack')?.lastSyncAt).toBeDefined())
   })
 
   it('opens the worker OAuth start URL on connect and revokes on disconnect', async () => {
@@ -384,9 +372,4 @@ describe('createIngestion', () => {
     expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('slack')
   })
 
-  it('marks Google cards as email source disconnected', async () => {
-    const deps = fakeDeps({ revokeGrant: vi.fn(async () => undefined) })
-    await createIngestion(deps).disconnect('google')
-    expect(deps.sink.markSourceDisconnected).toHaveBeenCalledWith('email')
-  })
 })

@@ -2,23 +2,20 @@ import { PROVIDER_SOURCE, type Actionable, type ConnectionInfo, type InboxItem, 
 import type { Ingestion, IngestionDeps } from '../contracts'
 import { createCtx, NotConnectedError, report, ThrottledError, type Ctx } from './context'
 import { githubContext, githubRepositories, githubWebhook, reconcileGithub } from './github'
-import { emailContext, pollGmail } from './gmail'
 import { checkUnreplied, scanFollowUps, slackContext, slackEvent } from './slack'
 
 const INBOX_INTERVAL_MS = 15_000
 const SEEN_ITEMS = 1_000
 const MAX_CONTEXT = 8_000
-const PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
+const PROVIDERS: OAuthProvider[] = ['github', 'slack']
 const PROVIDER_KV: Record<OAuthProvider, string[]> = {
   github: ['github.active', 'github.issuesSince', 'github.mentionsSince'],
   slack: ['slack.pending', 'slack.followUpChecked', 'slack.missingScopeLoggedAt', 'slack.channelScopeLoggedAt'],
-  google: ['gmail.historyId', 'gmail.polledAt'],
 }
-const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.', slack: 'slack.', google: 'gmail:' }
+const RETRY_PREFIX: Record<OAuthProvider, string> = { github: 'github.', slack: 'slack.' }
 const MANAGE_ACCESS: Record<OAuthProvider, string> = {
   github: 'https://github.com/settings/installations',
   slack: 'https://slack.com/apps/manage',
-  google: 'https://myaccount.google.com/permissions',
 }
 
 interface Job {
@@ -30,7 +27,6 @@ interface Job {
 
 const JOBS: Job[] = [
   { name: 'github.reconcile', provider: 'github', interval: () => 300_000 + Math.random() * 300_000, run: reconcileGithub },
-  { name: 'gmail.poll', provider: 'google', interval: () => 60_000, run: pollGmail },
   { name: 'slack.unreplied', provider: 'slack', interval: () => 60_000, run: checkUnreplied },
   { name: 'slack.followUp', provider: 'slack', interval: () => 3_600_000, run: scanFollowUps },
 ]
@@ -113,7 +109,6 @@ function contextFor(ctx: Ctx, a: Actionable) {
   if (a.source.kind === 'slack') return slackContext(ctx, a.metadata)
   if (!a.externalKey) return undefined
   if (a.source.kind === 'github') return githubContext(ctx, a.externalKey)
-  if (a.source.kind === 'email') return emailContext(ctx, a.externalKey)
   return undefined
 }
 

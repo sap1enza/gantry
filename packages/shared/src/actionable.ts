@@ -1,4 +1,4 @@
-export const SOURCE_KINDS = ['github', 'slack', 'email', 'api', 'manual'] as const
+export const SOURCE_KINDS = ['github', 'slack', 'api', 'manual'] as const
 export type SourceKind = (typeof SOURCE_KINDS)[number]
 
 export const FIXED_COLUMNS = ['todo', 'in_progress', 'review', 'done'] as const

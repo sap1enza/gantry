@@ -64,11 +64,6 @@ interface RetryState {
 
 const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'token_expired', 'token_revoked', 'not_authed'])
 const REFRESH_MARGIN_MS = 5 * 60_000
-const GOOGLE_RATE_LIMITS = new Set(['rateLimitExceeded', 'userRateLimitExceeded'])
-const GOOGLE_BACKOFF_MS = 60_000
-
-const googleRateLimited = (body: unknown) =>
-  ((body as { error?: { errors?: { reason?: string }[] } })?.error?.errors ?? []).some((x) => GOOGLE_RATE_LIMITS.has(x.reason ?? ''))
 
 export function backoffUntil(res: Response, now: number): number | undefined {
   const retryAfter = res.headers.get('retry-after')
@@ -173,10 +168,6 @@ export function createCtx(deps: IngestionDeps) {
       if (backoff) block(p, backoff)
       if (backoff && !res.ok) throw new ThrottledError(p, backoff)
       const body = res.status === 204 ? undefined : await res.json().catch(() => undefined)
-      if (p === 'google' && res.status === 403 && googleRateLimited(body)) {
-        block(p, backoff ?? now() + GOOGLE_BACKOFF_MS)
-        throw new ThrottledError(p, blocked.get(p)!)
-      }
       const rejected = res.status === 401 || (p === 'slack' && SLACK_AUTH_ERRORS.has((body as { error?: string })?.error ?? ''))
       if (rejected && attempt === 0) {
         accessToken = (await refresh(p, true)).accessToken

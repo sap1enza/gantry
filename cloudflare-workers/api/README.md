@@ -12,7 +12,6 @@ Vars (`wrangler.toml` `[vars]`):
 | `EMAIL_FROM` | Sender for magic-link emails |
 | `GITHUB_CLIENT_ID` | GitHub App client id (user-to-server tokens with expiry enabled) |
 | `SLACK_CLIENT_ID` | Slack app client id |
-| `GOOGLE_CLIENT_ID` | Google OAuth client id |
 
 Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`, see `.dev.vars.example`):
 
@@ -23,14 +22,12 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`, see `.dev.vars.ex
 | `GITHUB_WEBHOOK_SECRET` | GitHub App webhook secret (`X-Hub-Signature-256`) |
 | `SLACK_CLIENT_SECRET` | Slack app client secret |
 | `SLACK_SIGNING_SECRET` | Slack signing secret (Events API) |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `RESEND_API_KEY` | Optional. Without it, magic links are printed to the Worker log |
 
 ## Provider setup
 
 - GitHub App: callback URLs `<PUBLIC_URL>/oauth/github/callback` and `<PUBLIC_URL>/oauth/github_signin/callback`, "Expire user authorization tokens" on, webhook URL `<PUBLIC_URL>/webhooks/github`.
 - Slack app: redirect URL `<PUBLIC_URL>/oauth/slack/callback`, user scopes `channels:history channels:read groups:history groups:read im:history im:read mpim:history mpim:read search:read users:read`, Events API request URL `<PUBLIC_URL>/webhooks/slack` subscribed to user events `message.channels message.groups message.im message.mpim`.
-- Google: OAuth client (web) with redirect `<PUBLIC_URL>/oauth/google/callback`, Gmail API enabled, scope `gmail.readonly`.
 
 ## Run locally
 

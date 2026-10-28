@@ -1,7 +1,7 @@
 import type { GrantAccount, OAuthProvider } from '@gantry/shared'
 import type { Env } from './env'
 
-export const GRANT_PROVIDERS: OAuthProvider[] = ['github', 'slack', 'google']
+export const GRANT_PROVIDERS: OAuthProvider[] = ['github', 'slack']
 export type OAuthStartProvider = OAuthProvider | 'github_signin'
 export const OAUTH_PROVIDERS: OAuthStartProvider[] = [...GRANT_PROVIDERS, 'github_signin']
 
@@ -35,18 +35,6 @@ const providerConfig = (env: Env, provider: OAuthProvider) =>
       clientId: env.SLACK_CLIENT_ID,
       clientSecret: env.SLACK_CLIENT_SECRET,
       authorizeParams: { user_scope: 'channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,search:read,users:read' },
-    },
-    google: {
-      authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
-      tokenUrl: 'https://oauth2.googleapis.com/token',
-      clientId: env.GOOGLE_CLIENT_ID,
-      clientSecret: env.GOOGLE_CLIENT_SECRET,
-      authorizeParams: {
-        response_type: 'code',
-        scope: 'openid email profile https://www.googleapis.com/auth/gmail.readonly',
-        access_type: 'offline',
-        prompt: 'consent',
-      },
     },
   })[provider]
 
@@ -111,7 +99,6 @@ export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: 
   const { tokens, data } = await requestTokens(fetchImpl, env, tokenProvider(provider), {
     code,
     redirect_uri: redirectUri(env, provider),
-    ...(provider === 'google' ? { grant_type: 'authorization_code' } : {}),
   })
   if (provider === 'slack') {
     const userId: string = data.authed_user.id
@@ -123,10 +110,6 @@ export async function exchangeCode(fetchImpl: typeof fetch, env: Env, provider: 
       routingKeys: [`${teamId}:${userId}`],
     }
   }
-  if (provider === 'google') {
-    const info = await getJson(fetchImpl, 'https://openidconnect.googleapis.com/v1/userinfo', tokens.accessToken)
-    return { ...tokens, account: { id: info.sub, login: info.email, name: info.name, avatarUrl: info.picture }, routingKeys: [] }
-  }
   const account = await githubIdentity(fetchImpl, tokens.accessToken)
   const installations = provider === 'github' ? await githubInstallationKeys(fetchImpl, tokens.accessToken) : []
   return { ...tokens, account, routingKeys: [`user:${account.id}`, ...installations] }
@@ -137,15 +120,13 @@ export async function refreshTokens(fetchImpl: typeof fetch, env: Env, provider:
   return { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken }
 }
 
-export async function revokeGrant(fetchImpl: typeof fetch, env: Env, provider: OAuthProvider, accessToken: string, refreshToken?: string) {
+export async function revokeGrant(fetchImpl: typeof fetch, env: Env, provider: OAuthProvider, accessToken: string) {
   if (provider === 'github') {
     await fetchImpl(`https://api.github.com/applications/${env.GITHUB_CLIENT_ID}/grant`, {
       method: 'DELETE',
       headers: { ...GITHUB_HEADERS, authorization: `Basic ${btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`)}` },
       body: JSON.stringify({ access_token: accessToken }),
     })
-  } else if (provider === 'google') {
-    await fetchImpl(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken ?? accessToken)}`, { method: 'POST' })
   } else {
     await fetchImpl('https://slack.com/api/auth.revoke', { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } })
   }

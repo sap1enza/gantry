@@ -1,6 +1,6 @@
 # Gantry
 
-macOS triage board that turns GitHub/Slack/Gmail/API signals into actionables and dispatches Claude Code into per-card git worktrees. Spec: `docs/PRD.md`. Design screenshots: `docs/design/*.png`. Figma file key `DsAORjXJUM4arQDlbOB1kO` (frames: Triage `4:14895`, Connections `4:15282`, Activity `4:15536`, Preferences `4:15790`, Welcome `4:15973`).
+macOS triage board that turns GitHub/Slack/API signals into actionables and dispatches Claude Code into per-card git worktrees. Spec: `docs/PRD.md`. Design screenshots: `docs/design/*.png`. Figma file key `DsAORjXJUM4arQDlbOB1kO` (frames: Triage `4:14895`, Connections `4:15282`, Activity `4:15536`, Preferences `4:15790`, Welcome `4:15973`).
 
 ## Stack
 - pnpm 12 workspaces, TypeScript 7, vitest 5, zod 4.

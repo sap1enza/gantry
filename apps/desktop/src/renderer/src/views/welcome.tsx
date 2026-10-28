@@ -5,7 +5,7 @@ import { api } from '../bridge'
 import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
 import { useBrowserAuth } from './connections'
 
-const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
+const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups' } as const
 
 function useSetupProgress() {
   const app = useApp()
@@ -77,7 +77,7 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
           </h3>
           <span className="muted">After connecting, decide what becomes an actionable. Suggested starting points:</span>
           <ul>
-            {['PRs with red CI, conflicts, or changes requested', 'Review requests and direct mentions', 'Slack replies and follow-ups detected by AI', 'New emails in your inbox'].map((t) => (
+            {['PRs with red CI, conflicts, or changes requested', 'Review requests and direct mentions', 'Slack replies and follow-ups detected by AI'].map((t) => (
               <li key={t}>
                 <Check size={13} color="var(--accent)" /> {t}
               </li>

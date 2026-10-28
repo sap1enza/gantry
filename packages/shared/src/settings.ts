@@ -3,7 +3,6 @@ import { DEFAULT_ENABLED_TRIGGERS, type TriggerId } from './triggers'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'openai_compatible'
 export const LLM_DEFAULT_MODELS: Record<LlmProvider, string> = { anthropic: 'claude-haiku-5-5', openai: 'gpt-5-mini', openai_compatible: '' }
-export const GMAIL_CATEGORIES = ['promotions', 'social', 'updates', 'forums'] as const
 export type WorkspaceCleanup = 'delete' | 'keep' | 'ask'
 export type Appearance = 'system' | 'light' | 'dark'
 
@@ -41,15 +40,6 @@ export interface Settings {
   triggers: Record<TriggerId, boolean>
   github: { repositories: string[]; dependabotMinSeverity: 'low' | 'medium' | 'high' | 'critical'; issuesScope: 'assigned' | 'all' }
   slack: { channelAllow: string[]; channelDeny: string[]; unrepliedAfterMinutes: number }
-  email: {
-    inboxOnly: boolean
-    unreadOnly: boolean
-    excludeCategories: string[]
-    domainAllow: string[]
-    domainDeny: string[]
-    labels: string[]
-    llmGate: boolean
-  }
   llm: { provider: LlmProvider; model: string; baseUrl?: string }
   notifications: { needsInput: boolean; completed: boolean; failed: boolean; newActionable: boolean }
   launchAtLogin: boolean
@@ -74,15 +64,6 @@ export const DEFAULT_SETTINGS: Settings = {
   triggers: DEFAULT_ENABLED_TRIGGERS,
   github: { repositories: [], dependabotMinSeverity: 'high', issuesScope: 'assigned' },
   slack: { channelAllow: [], channelDeny: [], unrepliedAfterMinutes: 30 },
-  email: {
-    inboxOnly: true,
-    unreadOnly: true,
-    excludeCategories: [...GMAIL_CATEGORIES],
-    domainAllow: [],
-    domainDeny: [],
-    labels: [],
-    llmGate: false,
-  },
   llm: { provider: 'anthropic', model: LLM_DEFAULT_MODELS.anthropic },
   notifications: { needsInput: true, completed: true, failed: true, newActionable: false },
   launchAtLogin: false,

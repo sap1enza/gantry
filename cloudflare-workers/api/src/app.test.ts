@@ -89,8 +89,6 @@ beforeAll(async () => {
     SLACK_CLIENT_ID: 'sl-id',
     SLACK_CLIENT_SECRET: 'sl-secret',
     SLACK_SIGNING_SECRET: 'sl-sign',
-    GOOGLE_CLIENT_ID: 'go-id',
-    GOOGLE_CLIENT_SECRET: 'go-secret',
   }
 }, 30_000)
 

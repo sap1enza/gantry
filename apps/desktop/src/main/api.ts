@@ -216,7 +216,7 @@ export function createApi(deps: ApiDeps): GantryApi {
         if (remoteError)
           await platform.alert(
             'Remote data could not be deleted',
-            `Local data was deleted, but the Gantry Worker did not confirm deleting your account (${remoteError.message}). Revoke Gantry's GitHub, Slack and Google access from those services to cut it off.`,
+            `Local data was deleted, but the Gantry Worker did not confirm deleting your account (${remoteError.message}). Revoke Gantry's GitHub and Slack access from those services to cut it off.`,
           )
         platform.relaunch()
       },

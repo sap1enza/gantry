@@ -79,7 +79,7 @@ export function PreferencesView() {
               </Row>
             </Group>
 
-            <Group title="AI" sub="Used to detect Slack replies owed, follow-ups, and emails that need action. Calls go directly from this Mac.">
+            <Group title="AI" sub="Used to detect Slack replies owed and follow-ups. Calls go directly from this Mac.">
               <AiSettings />
             </Group>
 
@@ -99,7 +99,7 @@ export function PreferencesView() {
             </Group>
 
             <Group title="Inputs & integrations">
-              <Row title="Manage connections and triggers" hint="OAuth access, GitHub and Slack triggers, email, and custom API sources.">
+              <Row title="Manage connections and triggers" hint="OAuth access, GitHub and Slack triggers, and custom API sources.">
                 <button className="btn" onClick={() => app.go('connections')}>
                   <ArrowUpRight size={13} /> Open Connections
                 </button>

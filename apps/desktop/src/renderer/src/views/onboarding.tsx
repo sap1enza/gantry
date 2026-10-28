@@ -6,7 +6,7 @@ import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon, Tag } from '../ui'
 import { useBrowserAuth } from './connections'
 import { AgentSettings, AiSettings, WorkspaceCleanupRow } from './preferences'
 
-const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups', google: 'New inbox messages' } as const
+const HINTS = { github: 'Pull requests, issues, and alerts', slack: 'Mentions and follow-ups' } as const
 const STEPS = ['You', 'Inputs', 'Agents', 'AI'] as const
 
 export function Onboarding() {
@@ -119,7 +119,7 @@ export function Onboarding() {
     },
     AI: {
       title: 'AI checks',
-      sub: 'Optional. Detects Slack replies owed, follow-ups, and emails that need action. Calls go directly from this Mac.',
+      sub: 'Optional. Detects Slack replies owed and follow-ups. Calls go directly from this Mac.',
       body: (
         <div className="rows">
           <AiSettings />

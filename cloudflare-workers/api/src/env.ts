@@ -9,8 +9,6 @@ export interface Env {
   SLACK_CLIENT_ID: string
   SLACK_CLIENT_SECRET: string
   SLACK_SIGNING_SECRET: string
-  GOOGLE_CLIENT_ID: string
-  GOOGLE_CLIENT_SECRET: string
   RESEND_API_KEY?: string
 }
 
