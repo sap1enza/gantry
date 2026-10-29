@@ -1,6 +1,7 @@
 import { PROVIDER_SOURCE, unique, type Actionable, type CardAction, type OAuthProvider, type Priority, type SourceKind } from '@gantry/shared'
 import {
   Check,
+  LoaderCircle,
   Pause,
   PencilLine,
   Play,
@@ -59,17 +60,25 @@ export const ACTION_META: Record<CardAction, { label: string; icon: (p: LucidePr
   reopen_todo: { label: 'Reopen to To-do', icon: RotateCcw },
 }
 
-export function ActionButton({ action, onClick, large }: { action: CardAction; onClick: (anchor: HTMLElement) => void; large?: boolean }) {
+export function ActionButton({ action, onClick, large }: { action: CardAction; onClick: (anchor: HTMLElement) => unknown; large?: boolean }) {
   const { label, icon: Icon } = ACTION_META[action]
+  const [busy, setBusy] = useState(false)
   return (
     <button
       className={`btn ${large ? '' : 'sm'} ${action === 'start' || action === 'done' ? 'primary' : ''}`}
-      onClick={(e) => {
+      disabled={busy}
+      aria-busy={busy}
+      onClick={async (e) => {
         e.stopPropagation()
-        onClick(e.currentTarget)
+        setBusy(true)
+        try {
+          await onClick(e.currentTarget)
+        } finally {
+          setBusy(false)
+        }
       }}
     >
-      <Icon size={12} />
+      {busy ? <LoaderCircle size={12} className="spin" /> : <Icon size={12} />}
       {label}
     </button>
   )

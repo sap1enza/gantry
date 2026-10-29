@@ -254,7 +254,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const preview = await run(api.board.dispatchPreview(id))
           if (!preview) return
           if (preview.mustConfirm) setDispatchFor({ card: a, preview })
-          else await run(api.board.start(id))
+          else await run(api.board.start(id, { instructions: preview.instructions, permissionPreset: preview.permissionPreset }))
           return
         }
         case 'pause':

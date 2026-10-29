@@ -51,6 +51,23 @@ export function buildInstructions(a: Actionable, context?: string) {
   return [...parts, COMPLETION_INSTRUCTIONS].filter(Boolean).join('\n\n')
 }
 
+interface PullRefs {
+  url: string
+  head: string
+  base: string
+}
+
+export const conflictInstructions = ({ url, head, base }: PullRefs) =>
+  [
+    `# Resolve the merge conflicts in ${url}`,
+    `You are on \`${head}\`, the pull request branch.`,
+    `1. Run \`git pull --ff-only origin ${head}\`, then \`git fetch origin ${base}\` and \`git merge origin/${base}\`.`,
+    '2. Resolve every conflict, keeping the intent of both sides, and run the relevant tests.',
+    '3. Commit with the default merge message: `git commit --no-edit`.',
+    `4. Push with \`git push origin ${head}\`. Never rebase or force push.`,
+    COMPLETION_INSTRUCTIONS,
+  ].join('\n\n')
+
 const defaultModel = (provider: AgentProvider, model: string) => (provider.models.some((m) => m.id === model) ? model : provider.models[0]?.id)
 
 export const slugify = (title: string) =>
@@ -115,21 +132,32 @@ export class AgentRunner implements AgentControl {
     return (await this.deps.exec('gh', ['auth', 'status'])).code === 0
   }
 
+  private async conflictRefs(a: Actionable): Promise<PullRefs | undefined> {
+    const url = a.metadata.url
+    if (!a.triggers.includes('github.merge_conflict') || typeof url !== 'string') return undefined
+    const res = await this.deps.exec('gh', ['pr', 'view', url, '--json', 'headRefName,baseRefName,isCrossRepository'])
+    if (res.code !== 0) throw new Error(`Could not read ${url} with gh: ${res.output.trim()}`)
+    const pr = JSON.parse(res.output) as { headRefName: string; baseRefName: string; isCrossRepository: boolean }
+    if (pr.isCrossRepository) throw new Error('Conflicts on pull requests from forks have to be resolved by hand')
+    return { url, head: pr.headRefName, base: pr.baseRefName }
+  }
+
   async preview(id: string): Promise<DispatchPreview> {
     const a = this.board.must(id)
     const s = this.deps.settings()
     const repos = this.deps.repositories()
     const repo = inferRepository(a, repos)
     const provider = this.deps.providers.get(s.defaultProvider)
-    const [context, fullPresetAvailable] = await Promise.all([this.deps.fetchContext(a).catch(() => undefined), this.ghAuthenticated()])
+    const conflict = await this.conflictRefs(a)
+    const [context, fullPresetAvailable] = await Promise.all([conflict ? undefined : this.deps.fetchContext(a).catch(() => undefined), this.ghAuthenticated()])
     return {
-      instructions: buildInstructions(a, context),
+      instructions: conflict ? conflictInstructions(conflict) : buildInstructions(a, context),
       repository: repo?.remote,
       repositoryCandidates: repos.map((r) => r.remote),
       provider: s.defaultProvider,
       model: provider && defaultModel(provider, s.defaultModel),
       models: provider?.models ?? [],
-      permissionPreset: s.defaultPermissionPreset,
+      permissionPreset: conflict ? 'full' : s.defaultPermissionPreset,
       fullPresetAvailable,
       mustConfirm: s.confirmBeforeDispatch || !repo,
     }
@@ -148,17 +176,18 @@ export class AgentRunner implements AgentControl {
 
   private async startDispatch(id: string, overrides: DispatchOverrides, auto: boolean) {
     const s = this.deps.settings()
-    const permissionPreset = overrides.permissionPreset ?? s.defaultPermissionPreset
+    const conflict = await this.conflictRefs(this.board.must(id))
+    const permissionPreset = overrides.permissionPreset ?? (conflict ? 'full' : s.defaultPermissionPreset)
     if (permissionPreset === 'full' && !(await this.ghAuthenticated())) throw new Error('The Full preset requires `gh auth login`')
-    const context = overrides.instructions === undefined ? await this.deps.fetchContext(this.board.must(id)).catch(() => undefined) : undefined
+    const context = overrides.instructions === undefined && !conflict ? await this.deps.fetchContext(this.board.must(id)).catch(() => undefined) : undefined
     const a = this.board.must(id)
     assertAction(a, 'start')
     const repos = this.deps.repositories()
     const repo = findRepository(repos, overrides.repository) ?? inferRepository(a, repos)
     if (!repo) throw new Error('Choose a repository before starting')
     const provider = this.provider(s.defaultProvider)
-    const instructions = overrides.instructions ?? buildInstructions(a, context)
-    const reuse = a.dispatch?.repository === repo.remote ? a.dispatch : undefined
+    const instructions = overrides.instructions ?? (conflict ? conflictInstructions(conflict) : buildInstructions(a, context))
+    const reuse = a.dispatch?.repository === repo.remote && (!conflict || a.dispatch.branch === conflict.head) ? a.dispatch : undefined
     const slug = a.dispatch && !reuse ? `${a.displayId}-${slugify(repo.remote)}-${slugify(a.title)}` : `${a.displayId}-${slugify(a.title)}`
     const dispatch: Dispatch = {
       id: randomUUID(),
@@ -167,7 +196,7 @@ export class AgentRunner implements AgentControl {
       repository: repo.remote,
       repositoryPath: repo.path,
       worktreePath: reuse?.worktreePath ?? join(expandHome(s.workspaceLocation, this.deps.home ?? homedir()), slug),
-      branch: reuse?.branch ?? `gantry/${slug}`,
+      branch: conflict?.head ?? reuse?.branch ?? `gantry/${slug}`,
       sessionId: a.agentState === 'paused' ? reuse?.sessionId : undefined,
       permissionPreset,
       instructions,
@@ -264,7 +293,7 @@ export class AgentRunner implements AgentControl {
   private async createWorktree(a: Actionable, d: Dispatch) {
     const repo = this.deps.repositories().find((r) => r.path === d.repositoryPath)
     const branchExists = (await git(this.deps.exec, d.repositoryPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${d.branch}`)).code === 0
-    const added = await git(this.deps.exec, d.repositoryPath, 'worktree', 'add', d.worktreePath, ...(branchExists ? [d.branch] : ['-b', d.branch, await this.baseRef(d.repositoryPath, repo?.defaultBranch)]))
+    const added = await git(this.deps.exec, d.repositoryPath, 'worktree', 'add', d.worktreePath, ...(branchExists ? [d.branch] : ['-b', d.branch, await this.baseRef(d.repositoryPath, d.branch.startsWith('gantry/') ? repo?.defaultBranch : d.branch)]))
     if (added.code !== 0) throw new Error(`git worktree add failed: ${added.output.trim()}`)
     if (!repo?.setupCommand) return
     const setup = await this.deps.exec(...shellCommand(repo.setupCommand), d.worktreePath)

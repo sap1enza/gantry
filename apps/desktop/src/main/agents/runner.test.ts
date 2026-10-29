@@ -134,6 +134,30 @@ describe('worktrees', () => {
     expect(s.eventTypes(id).at(-1)).toBe('deleted')
   })
 
+  it('dispatches a merge conflict onto the pull request branch with merge-and-push instructions', async () => {
+    const s = setup()
+    const url = 'https://github.com/acme/api/pull/7'
+    s.execResults['pr view'] = { code: 0, output: JSON.stringify({ headRefName: 'feature/x', baseRefName: 'main', isCrossRepository: false }) }
+    const id = s.board.ingest(signal({ trigger: 'github.merge_conflict', externalKey: url, metadata: { url } })).actionableId!
+    await s.runner.start(id)
+    await flush()
+    const req = s.provider.requests[0]!
+    expect(req.permissionPreset).toBe('full')
+    expect(s.board.must(id).dispatch!.branch).toBe('feature/x')
+    expect(s.execCalls).toContainEqual(['git', '-C', '/code/api', 'worktree', 'add', req.worktreePath, '-b', 'feature/x', 'feature/x'])
+    expect(req.instructions).toContain('git merge origin/main')
+    expect(req.instructions).toContain('git commit --no-edit')
+    expect(req.instructions).toContain('git push origin feature/x')
+  })
+
+  it('refuses to dispatch a merge conflict from a fork', async () => {
+    const s = setup()
+    const url = 'https://github.com/acme/api/pull/8'
+    s.execResults['pr view'] = { code: 0, output: JSON.stringify({ headRefName: 'patch-1', baseRefName: 'main', isCrossRepository: true }) }
+    const id = s.board.ingest(signal({ trigger: 'github.merge_conflict', externalKey: url, metadata: { url } })).actionableId!
+    await expect(s.runner.start(id)).rejects.toThrow(/forks/)
+  })
+
   it('moving a Review card to Done cleans up like the Done button', async () => {
     const s = setup()
     const id = await started(s)
