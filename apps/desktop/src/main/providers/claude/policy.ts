@@ -97,6 +97,7 @@ export function decide(preset: PermissionPreset, worktreePath: string, toolName:
 }
 
 export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard: Guard): SandboxSettings {
+  if (preset === 'full') return { enabled: false }
   const guardPaths = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig, `${guard.commonDir}/config`]
   return {
     enabled: true,
@@ -107,11 +108,7 @@ export function sandboxFor(preset: PermissionPreset, worktreePath: string, guard
       denyWrite: preset === 'read_only' ? [worktreePath, guard.commonDir, ...guardPaths] : guardPaths,
       denyRead: SECRET_PATHS,
     },
-    network:
-      preset === 'full'
-        ? { allowedDomains: ['*'] }
-        : { allowedDomains: preset === 'edit_test' ? PACKAGE_REGISTRIES : [], strictAllowlist: true },
-    ...(preset === 'full' && { excludedCommands: ['git push', 'git push *', 'git fetch *', 'git pull *', 'gh *'] }),
+    network: { allowedDomains: preset === 'edit_test' ? PACKAGE_REGISTRIES : [], strictAllowlist: true },
   }
 }
 

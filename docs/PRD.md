@@ -172,7 +172,7 @@ Actionable {
 - Instructions: auto-built from title, body, links, and fetched context (PR diff summary). Editable.
 - Repository: inferred from source (GitHub remote match, API `repository`), else dropdown of registered repos.
 - Agent: provider + model.
-- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Enforced structurally: Agent SDK sandbox (filesystem write scope + network allowlist), GitHub tokens stripped for Read-only and Edit + test, and a per-worktree pre-push hook that blocks pushes except fast-forward pushes to the card's branch in Full. Out-of-worktree reads and web fetches ask the user; in Full every non-read-only `gh` command asks.
+- Permission preset: **Read-only** (investigate, no edits) · **Edit + test** (edit files, run commands, no push/PR) · **Full** (may push branch and open PR; requires `gh` auth). Enforced structurally: Agent SDK sandbox for Read-only and Edit + test (filesystem write scope + network allowlist; Full runs unsandboxed so git uses the user's SSH agent and toolchain), GitHub tokens stripped for Read-only and Edit + test, and a per-worktree pre-push hook that blocks pushes except fast-forward pushes to the card's branch in Full. Out-of-worktree reads and web fetches ask the user; in Full every non-read-only `gh` command asks.
 
 **Concurrency**: `Max concurrent agents` setting (default 3). Beyond limit → card in In Progress tagged `Queued`, auto-starts when a slot frees.
 

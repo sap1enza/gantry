@@ -116,8 +116,8 @@ describe('presetOptions', () => {
 describe('sandboxFor', () => {
   const guarded = [guard.hooksDir, guard.ghConfigDir, guard.worktreeConfig, '/code/repo/.git/config']
 
-  it('enforces the sandbox with no escape hatch in every preset', () => {
-    for (const preset of ['read_only', 'edit_test', 'full'] as const) {
+  it('enforces the sandbox with no escape hatch in the restricted presets', () => {
+    for (const preset of ['read_only', 'edit_test'] as const) {
       expect(sandboxFor(preset, WT, guard)).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false })
       expect(sandboxFor(preset, WT, guard).filesystem!.denyRead).toContain('~/.aws')
     }
@@ -137,11 +137,7 @@ describe('sandboxFor', () => {
     expect(sandbox.network!.allowedDomains).not.toContain('github.com')
   })
 
-  it('full: any host, with git network commands outside the sandbox', () => {
-    expect(sandboxFor('full', WT, guard)).toMatchObject({
-      filesystem: { denyWrite: guarded },
-      network: { allowedDomains: ['*'] },
-      excludedCommands: ['git push', 'git push *', 'git fetch *', 'git pull *', 'gh *'],
-    })
+  it('full: runs unsandboxed so git can use the user\'s SSH agent and toolchain', () => {
+    expect(sandboxFor('full', WT, guard)).toEqual({ enabled: false })
   })
 })
