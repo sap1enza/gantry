@@ -230,6 +230,12 @@ export function ago(iso?: string) {
   if (s < 86_400) return relative.format(-Math.round(s / 3600), 'hour')
   return new Date(iso).toLocaleDateString()
 }
+const pad = (n: number) => String(n).padStart(2, '0')
+export function when(iso: string, now = new Date()) {
+  const d = new Date(iso)
+  if (d.toDateString() === now.toDateString() && d <= now) return ago(iso)
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 export const elapsed = (iso: string, now: number) => {
   const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000))
   const mm = String(Math.floor(s / 60) % 60).padStart(2, '0')

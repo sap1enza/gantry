@@ -3,7 +3,7 @@ import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, 
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
-import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover } from '../ui'
+import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover, when } from '../ui'
 import { DetailsPanel } from './details'
 import { Welcome } from './welcome'
 
@@ -360,7 +360,7 @@ function statusTags(card: Actionable, now: number): string[] {
   if (card.column === 'in_progress' && state === 'running' && card.dispatch) out.push(`Running ${elapsed(card.dispatch.startedAt, now)}`)
   else if (card.column === 'in_progress' && state === 'paused') out.push(card.pendingQuestion ? 'Paused · awaiting input' : 'Paused')
   else if (state === 'awaiting_input') out.push('Awaiting input')
-  else if ((card.column === 'done' || card.column === 'review') && state === 'completed') out.push(`Completed · ${clock(card.doneAt ?? card.updatedAt)}`)
+  else if ((card.column === 'done' || card.column === 'review') && state === 'completed') out.push(`Completed · ${when(card.doneAt ?? card.updatedAt)}`)
   if (card.dismissedAt) out.push('Dismissed')
   if (card.snoozedUntil && new Date(card.snoozedUntil).getTime() > now) out.push(`Snoozed until ${clock(card.snoozedUntil)}`)
   return [...out, ...card.tags]
@@ -408,7 +408,7 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
             <span className="truncate">{sourceLabel(card.source)}</span>
           </>
         )}
-        {fields.receivedTime && <span>{fields.source ? '· ' : ''}{clock(card.createdAt)}</span>}
+        {fields.receivedTime && <span>{fields.source ? '· ' : ''}{when(card.createdAt)}</span>}
         <button className="icon-btn" style={{ marginLeft: 'auto', height: 18 }} aria-label="Card menu" onClick={(e) => (e.stopPropagation(), menu.toggle(e.currentTarget))}>
           <MoreHorizontal size={14} />
         </button>

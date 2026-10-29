@@ -3,7 +3,7 @@ import { ChevronRight, ExternalLink, FileText, GitPullRequest, List, PanelRightC
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL } from '../ui'
+import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL, when } from '../ui'
 
 export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
@@ -140,7 +140,7 @@ export function DetailsPanel({ id }: { id: string }) {
         <div className="row">
           <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card, app.snapshot?.columns)}</Tag>
           <span className="small muted" style={{ marginLeft: 'auto' }}>
-            Created {clock(card.createdAt)}
+            Created {when(card.createdAt)}
           </span>
         </div>
         {editing ? (
