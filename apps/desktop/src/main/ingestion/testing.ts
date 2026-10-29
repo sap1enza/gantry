@@ -21,6 +21,7 @@ export function fakeDeps(worker?: Partial<WorkerClient>) {
   }
   const deps = {
     sink,
+    reports: { upsert: vi.fn<IngestionDeps['reports']['upsert']>() },
     settings,
     kv: { get: <T>(k: string) => kv.get(k) as T | undefined, set: (k: string, v: unknown) => void kv.set(k, structuredClone(v)), delete: (k: string) => void kv.delete(k) },
     secrets: { get: (k: string) => secrets.get(k), set: (k: string, v: string) => void secrets.set(k, v), delete: (k: string) => void secrets.delete(k), clear: () => secrets.clear() },

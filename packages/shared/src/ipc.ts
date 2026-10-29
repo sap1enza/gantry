@@ -2,6 +2,7 @@ import type { Actionable, Column, ColumnId, Link, PermissionPreset, Priority } f
 import type { ApiTokenInfo, ConnectionStatus, CreatedApiToken, OAuthProvider } from './api'
 import type { ActivityEvent, ActivityQuery } from './events'
 import type { AgentEvent } from './provider'
+import type { Report } from './report'
 import type { Settings } from './settings'
 import type { TriggerId } from './triggers'
 
@@ -30,6 +31,7 @@ export interface BoardFilter {
   showSnoozed?: boolean
   showDismissed?: boolean
   showArchived?: boolean
+  today?: boolean
 }
 
 export interface CardEdit {
@@ -151,6 +153,11 @@ export interface GantryApi {
     sendTestActionable(): Promise<void>
     endpoint(): Promise<string>
   }
+  reports: {
+    list(showArchived?: boolean): Promise<Report[]>
+    markRead(id: string): Promise<void>
+    archive(id: string): Promise<void>
+  }
   settings: {
     get(): Promise<Settings>
     update(patch: Partial<Settings>): Promise<Settings>
@@ -185,7 +192,8 @@ export type GantryPush =
   | { type: 'agent.event'; actionableId: string; event: AgentEvent }
   | { type: 'connections.changed' }
   | { type: 'settings.changed' }
-  | { type: 'navigate'; view: 'triage' | 'activity' | 'connections' | 'preferences'; actionableId?: string }
+  | { type: 'reports.changed' }
+  | { type: 'navigate'; view: 'triage' | 'reports' | 'activity' | 'connections' | 'preferences'; actionableId?: string }
 
 export interface GantryTransport {
   invoke(path: string, args: unknown[]): Promise<unknown>

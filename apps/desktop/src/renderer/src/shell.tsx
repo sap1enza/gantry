@@ -1,4 +1,4 @@
-import { Activity, Blocks, Columns3, PanelLeft, Plug, Search, SlidersHorizontal } from 'lucide-react'
+import { Activity, Blocks, Columns3, FileText, PanelLeft, Plug, Search, SlidersHorizontal } from 'lucide-react'
 import { useState } from 'react'
 import { useApp, type View } from './app'
 import { ActivityView } from './views/activity'
@@ -6,21 +6,23 @@ import { ConnectionsView } from './views/connections'
 import { DispatchSheet, NewActionableModal, SearchPalette, SnoozeMenu } from './views/overlays'
 import { Onboarding } from './views/onboarding'
 import { PreferencesView } from './views/preferences'
+import { ReportsView } from './views/reports'
 import { TriageView } from './views/triage'
 import { initials, INPUTS, SOURCE_LABELS, SourceIcon } from './ui'
 
 const NAV: { view: View; label: string; icon: typeof Activity }[] = [
   { view: 'triage', label: 'Triage', icon: Columns3 },
+  { view: 'reports', label: 'Reports', icon: FileText },
   { view: 'activity', label: 'Activity', icon: Activity },
   { view: 'connections', label: 'Connections', icon: Plug },
 ]
-const TITLES: Record<View, string> = { triage: 'Triage', activity: 'Activity', connections: 'Connections', preferences: 'Preferences' }
+const TITLES: Record<View, string> = { triage: 'Triage', reports: 'Reports', activity: 'Activity', connections: 'Connections', preferences: 'Preferences' }
 
 export function Shell() {
   const app = useApp()
   const [sidebar, setSidebar] = useState(true)
   const stats = app.snapshot?.stats
-  const welcome = app.view === 'triage' && app.snapshot && (app.snapshot.stats.total === 0 || app.showWelcome)
+  const welcome = app.view === 'triage' && app.snapshot && ((app.snapshot.stats.total === 0 && !app.filter.today) || app.showWelcome)
 
   if (app.account && !app.account.onboarded) return <Onboarding />
 
@@ -57,6 +59,7 @@ export function Shell() {
             <Icon size={15} />
             {label}
             {view === 'triage' && <span className="count">{stats?.total ?? 0}</span>}
+            {view === 'reports' && app.unreadReports > 0 && <span className="count">{app.unreadReports}</span>}
           </button>
         ))}
         <div className="eyebrow">Inputs</div>
@@ -93,6 +96,7 @@ export function Shell() {
 
       <main className="main">
         {app.view === 'triage' && <TriageView />}
+        {app.view === 'reports' && <ReportsView />}
         {app.view === 'activity' && <ActivityView />}
         {app.view === 'connections' && <ConnectionsView />}
         {app.view === 'preferences' && <PreferencesView />}

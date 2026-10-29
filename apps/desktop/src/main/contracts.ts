@@ -1,4 +1,4 @@
-import type { Actionable, ConnectionInfo, IngestSink, OAuthProvider, Settings, WorkerClient } from '@gantry/shared'
+import type { Actionable, ConnectionInfo, CreateReportRequest, IngestSink, OAuthProvider, Settings, WorkerClient } from '@gantry/shared'
 
 export interface SecretStore {
   get(key: string): string | undefined
@@ -15,6 +15,7 @@ export interface KeyValueStore {
 
 export interface IngestionDeps {
   sink: IngestSink
+  reports: { upsert(request: CreateReportRequest, id: string): void }
   kv: KeyValueStore
   getSettings(): Settings
   worker(): WorkerClient | undefined

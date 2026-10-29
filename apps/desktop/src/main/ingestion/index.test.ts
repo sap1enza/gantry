@@ -27,6 +27,16 @@ describe('pollInbox', () => {
     expect(worker.ack).toHaveBeenCalledWith(['1', '2', '3'])
   })
 
+  it('stores report items as reports, not cards', async () => {
+    const request = { title: 'Flaky checkout', body: '# Notes' }
+    const worker = workerWith([{ id: 'r1', receivedAt: NOW.toISOString(), payload: { kind: 'report.create', id: 'rep-1', tokenName: 'ci', request } }])
+    const deps = fakeDeps(worker)
+    await pollInbox(createCtx(deps))
+    expect(deps.reports.upsert).toHaveBeenCalledWith(request, 'rep-1')
+    expect(deps.sink.ingest).not.toHaveBeenCalled()
+    expect(worker.ack).toHaveBeenCalledWith(['r1'])
+  })
+
   it('logs a permanently failing item as filtered and keeps going', async () => {
     const worker = workerWith([create('1', 'a'), create('2', 'boom'), create('3', 'c')])
     const deps = fakeDeps(worker)

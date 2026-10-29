@@ -152,6 +152,19 @@ describe('actionables API', () => {
     expect(await inbox(auth)).toEqual([])
   })
 
+  it('enqueues reports, accepts bodies past 64 KB, and rejects invalid ones', async () => {
+    const { auth } = await registerDevice()
+    const { token } = await createToken(auth)
+    const bearer = `Bearer ${token}`
+    expect((await call('/v1/reports', { method: 'POST', auth: bearer, body: JSON.stringify({ title: 'x' }) })).status).toBe(400)
+
+    const request = { title: 'Flaky checkout', body: 'a'.repeat(90_000), source: { name: 'Claude triage' }, external_id: 'checkout', tags: ['recurring'] }
+    const created = await call('/v1/reports', { method: 'POST', auth: bearer, body: JSON.stringify(request) })
+    expect(created.status).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+    expect((await inbox(auth)).map((i) => i.payload)).toEqual([{ kind: 'report.create', id, tokenName: 'Honeybadger', request }])
+  })
+
   it('enqueues a sample test actionable for the device', async () => {
     const { auth } = await registerDevice()
     expect((await call('/v1/test-actionable', { method: 'POST', auth })).status).toBe(201)

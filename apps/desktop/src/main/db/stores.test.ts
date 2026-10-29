@@ -6,7 +6,7 @@ describe('db', () => {
   it('migrates once and seeds the fixed columns', () => {
     const db = openDb(':memory:')
     expect(db.prepare('SELECT id FROM columns ORDER BY position').all().map((r) => r.id)).toEqual(['todo', 'in_progress', 'review', 'done'])
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4)
   })
 
   it('exposes card fields as indexed generated columns', () => {

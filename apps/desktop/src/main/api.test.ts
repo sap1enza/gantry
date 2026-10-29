@@ -20,6 +20,7 @@ function api(s = setup(), workerFetch?: typeof fetch, ingestion?: Partial<Ingest
   }
   const gantry = createApi({
     board: s.board,
+    reports: s.reports,
     runner: s.runner,
     account,
     settings: s.settings,

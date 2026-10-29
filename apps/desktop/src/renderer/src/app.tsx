@@ -19,7 +19,7 @@ import { shortcutFor } from './lib/shortcuts'
 import { reuseSnapshot } from './lib/snapshot'
 import { Modal } from './ui'
 
-const VIEWS = ['triage', 'activity', 'connections', 'preferences'] as const
+const VIEWS = ['triage', 'reports', 'activity', 'connections', 'preferences'] as const
 export type View = (typeof VIEWS)[number]
 
 interface DialogAction {
@@ -49,6 +49,7 @@ export interface AppState {
   account?: Account
   reloadAccount(): Promise<void>
   connections: ConnectionInfo[]
+  unreadReports: number
   checks?: SystemChecks
   reloadChecks(): Promise<void>
   selectedId?: string
@@ -98,6 +99,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>()
   const [account, setAccount] = useState<Account>()
   const [connections, setConnections] = useState<ConnectionInfo[]>([])
+  const [unreadReports, setUnreadReports] = useState(0)
   const [checks, setChecks] = useState<SystemChecks>()
   const [selectedId, setSelectedId] = useState<string>()
   const [panelOpen, setPanelOpen] = useState(false)
@@ -148,11 +150,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const reloadSettings = useCallback(() => api.settings.get().then(setSettings), [])
   const reloadAccount = useCallback(() => api.account.get().then(setAccount), [])
   const reloadConnections = useCallback(() => api.connections.list().then(setConnections), [])
+  const reloadUnreadReports = useCallback(() => api.reports.list().then((rs) => setUnreadReports(rs.filter((r) => !r.readAt).length)), [])
   const reloadChecks = useCallback(() => api.system.checks().then(setChecks), [])
 
   useEffect(() => {
-    void Promise.all([reloadSettings(), reloadAccount(), reloadConnections(), reloadChecks()])
-  }, [reloadSettings, reloadAccount, reloadConnections, reloadChecks])
+    void Promise.all([reloadSettings(), reloadAccount(), reloadConnections(), reloadChecks(), reloadUnreadReports()])
+  }, [reloadSettings, reloadAccount, reloadConnections, reloadChecks, reloadUnreadReports])
   useEffect(() => void reloadSnapshot(), [filter, reloadSnapshot])
 
   const go = useCallback((v: View, opts?: { activityCard?: string }) => {
@@ -169,6 +172,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () =>
       bridge.onPush((p) => {
         if (p.type === 'board.changed') void reloadSnapshot()
+        else if (p.type === 'reports.changed') void reloadUnreadReports()
         else if (p.type === 'connections.changed') void Promise.all([reloadConnections(), reloadAccount(), reloadChecks()])
         else if (p.type === 'settings.changed') void Promise.all([reloadSettings(), reloadAccount(), reloadChecks()])
         else if (p.type === 'navigate') {
@@ -176,7 +180,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           else go(p.view)
         }
       }),
-    [reloadSnapshot, reloadConnections, reloadSettings, reloadAccount, reloadChecks, open, go],
+    [reloadSnapshot, reloadUnreadReports, reloadConnections, reloadSettings, reloadAccount, reloadChecks, open, go],
   )
 
   useEffect(() => {
@@ -355,6 +359,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       account,
       reloadAccount,
       connections,
+      unreadReports,
       checks,
       reloadChecks,
       selectedId,
@@ -382,7 +387,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       run,
     }),
-    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, checks, reloadChecks, selectedId, panelOpen, open, act, move, reopenFor, dispatchFor, snoozeFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
+    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, unreadReports, checks, reloadChecks, selectedId, panelOpen, open, act, move, reopenFor, dispatchFor, snoozeFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
   )
 
   return (

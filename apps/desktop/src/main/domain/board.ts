@@ -562,7 +562,16 @@ export class Board implements IngestSink {
     if (unsnoozedInProgress) this.agents?.drain()
   }
 
+  private touchedSince(since: string) {
+    const rows = this.sql(
+      "SELECT DISTINCT actionable_id AS id FROM events WHERE type = 'received' AND created_at >= ? AND actionable_id IS NOT NULL AND json_extract(data, '$.outcome') IN ('created', 'updated')",
+    ).all(since) as { id: string }[]
+    return new Set(rows.map((r) => r.id))
+  }
+
   snapshot(filter: BoardFilter = {}): BoardSnapshot {
+    const today = this.startOfToday()
+    const touchedToday = filter.today ? this.touchedSince(today) : undefined
     const actionables = this.where(
       '(? OR archived_at IS NULL) AND (? OR dismissed_at IS NULL) AND (? OR snoozed_until IS NULL)',
       Number(!!filter.showArchived),
@@ -573,10 +582,10 @@ export class Board implements IngestSink {
         (a) =>
           (!filter.sources?.length || filter.sources.includes(a.source.name) || filter.sources.includes(a.source.kind)) &&
           (!filter.providers?.length || (!!a.dispatch && filter.providers.includes(a.dispatch.provider))) &&
-          (!filter.tags?.length || a.tags.some((t) => filter.tags!.includes(t))),
+          (!filter.tags?.length || a.tags.some((t) => filter.tags!.includes(t))) &&
+          (!touchedToday || a.createdAt >= today || touchedToday.has(a.id)),
       )
       .sort(compareCards)
-    const today = this.startOfToday()
     const live = this.sql(
       "SELECT agent_state AS state, COUNT(*) AS n FROM actionables WHERE board_column = 'in_progress' AND dismissed_at IS NULL GROUP BY agent_state",
     ).all() as { state: AgentState | null; n: number }[]

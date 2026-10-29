@@ -315,7 +315,11 @@ function ApiCard() {
     "auto_start": false
   }'
 → { "id": "…", "url": "gantry://actionable/<id>" }
-Also: PATCH /v1/actionables/:id · POST /v1/actionables/:id/dismiss`}
+Also: PATCH /v1/actionables/:id · POST /v1/actionables/:id/dismiss
+
+POST /v1/reports (long-form markdown, not a card)
+  { "title": "…", "body": "markdown", "source": { "name": "Claude triage" }, "external_id": "checkout-flake", "links": [], "tags": [] }
+→ { "id": "…" }  Same source + external_id replaces the report and marks it unread.`}
         </pre>
       )}
       {created && (

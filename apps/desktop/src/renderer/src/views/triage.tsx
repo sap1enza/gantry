@@ -53,7 +53,7 @@ export function TriageView() {
   const fieldsPop = usePopover()
 
   if (!s || !fields) return null
-  if (s.stats.total === 0 && !s.actionables.length) return <Welcome />
+  if (s.stats.total === 0 && !s.actionables.length && !app.filter.today) return <Welcome />
 
   const toggleField = (k: keyof CardFieldVisibility) => app.updateSettings({ cardFields: { ...fields, [k]: !fields[k] } })
   const addColumn = async () => {
@@ -222,6 +222,9 @@ function Toolbar() {
 
   return (
     <div className="toolbar">
+      <button className={`btn sm ${f.today ? 'active' : ''}`} aria-pressed={!!f.today} onClick={() => app.setFilter({ ...f, today: f.today ? undefined : true })}>
+        Today
+      </button>
       <button className="btn sm" onClick={(e) => srcPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
         {sources.length === 0 ? 'All sources' : sources.length === 1 ? SOURCE_LABELS[sources[0] as keyof typeof SOURCE_LABELS] : `${sources.length} sources`}

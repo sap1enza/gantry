@@ -12,6 +12,7 @@ import type { Ingestion, SecretStore } from './contracts'
 import type { RepositoryStore, SettingsStore } from './db/stores'
 import { type Board, USER } from './domain/board'
 import { parseRemote } from './domain/repositories'
+import type { Reports } from './domain/reports'
 import type { AccountService } from './system/account'
 import { type Exec, git } from './system/exec'
 
@@ -26,6 +27,7 @@ export interface Platform {
 
 export interface ApiDeps {
   board: Board
+  reports: Reports
   runner: AgentRunner
   account: AccountService
   settings: SettingsStore
@@ -50,7 +52,7 @@ export function toCsv(events: ActivityEvent[]) {
 }
 
 export function createApi(deps: ApiDeps): GantryApi {
-  const { board, runner, account, settings, repos, platform, ingestion } = deps
+  const { board, reports, runner, account, settings, repos, platform, ingestion } = deps
   const fetchImpl = deps.fetch ?? fetch
 
   const openExternal = async (url: string) => {
@@ -122,6 +124,11 @@ export function createApi(deps: ApiDeps): GantryApi {
         void ingestion.syncNow().catch(() => undefined)
       },
       endpoint: async () => new URL('/v1/actionables', settings.get().workerUrl).toString(),
+    },
+    reports: {
+      list: async (showArchived) => reports.list(showArchived),
+      markRead: async (id) => reports.markRead(id),
+      archive: async (id) => reports.archive(id),
     },
     settings: {
       get: async () => settings.get(),

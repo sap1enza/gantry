@@ -17,6 +17,7 @@ import { createApi } from './api'
 import { openDb } from './db'
 import { createRepositoryStore, createSecretStore, createSettingsStore, jsonTable } from './db/stores'
 import { Board } from './domain/board'
+import { Reports } from './domain/reports'
 import { createIngestion } from './ingestion'
 import { createClaudeProvider } from './providers/claude'
 import { AccountService } from './system/account'
@@ -125,6 +126,7 @@ function main() {
   }
 
   const board = new Board({ db, meta, settings: () => settings.get(), repositories: () => repos.list(), push })
+  const reports = new Reports({ db, push })
   resolveCard = (target) => board.resolveTarget(target)?.id ?? target
   const account = new AccountService({ meta, secrets, workerUrl: () => settings.get().workerUrl })
 
@@ -133,6 +135,7 @@ function main() {
 
   const ingestion = createIngestion({
     sink: board,
+    reports,
     kv: jsonTable(db, 'kv'),
     getSettings: () => settings.get(),
     worker: () => account.worker(),
@@ -154,6 +157,7 @@ function main() {
 
   const api = createApi({
     board,
+    reports,
     runner,
     account,
     settings,

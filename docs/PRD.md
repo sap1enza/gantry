@@ -228,6 +228,8 @@ Response: `{ id, url: "gantry://actionable/<id>" }`. Idempotent on `source.name 
 
 Also: `PATCH /v1/actionables/:id` (title/body/links/tags) and `POST /v1/actionables/:id/dismiss`. The Worker holds no card data; these are queued as `update` / `dismiss` inbox items and applied by the app on its next poll. No GET. "Send test actionable" button in Connections.
 
+`POST /v1/reports` (`title`, `body` markdown up to 100 000 chars, optional `source.name`, `external_id`, `links`, `tags`; body cap 512 KB) queues a `report.create` inbox item and returns `{ id }`. Reports are not cards: they appear in the Reports sidebar view with an unread badge and can be archived. Idempotent on `source.name + external_id`; an update replaces the report and marks it unread again.
+
 ---
 
 ## 9. LLM detection layer
@@ -279,7 +281,7 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 ## 13. Worker
 
 - Hono on Cloudflare Workers, D1 for users / grants / tokens / inbox, Secrets for OAuth client secrets.
-- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `POST /oauth/:provider/start` (device auth), `GET /oauth/:provider/callback`, `POST /auth/complete`, `POST /webhooks/github`, `DELETE /v1/me` (delete all).
+- Routes: `POST /v1/actionables`, `PATCH /v1/actionables/:id`, `POST /v1/actionables/:id/dismiss`, `POST /v1/reports`, `GET /v1/inbox`, `POST /v1/inbox/ack`, `POST /v1/devices`, `POST /v1/grants/:provider/refresh` (returns a fresh access token; app calls it on 401 or before expiry), `POST /auth/email` (magic link), `POST /oauth/:provider/start` (device auth), `GET /oauth/:provider/callback`, `POST /auth/complete`, `POST /webhooks/github`, `DELETE /v1/me` (delete all).
 - Webhook signature verification (GitHub HMAC).
 - Hardening: per-token rate limit 60 req/min (429 with `Retry-After`), request body cap 64 KB, tokens revocable from Connections (revoked list checked on every request).
 - Inbox items are deleted after ack; undelivered items expire after 30 days.

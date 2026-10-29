@@ -1,5 +1,6 @@
 import {
   createActionableSchema,
+  createReportSchema,
   DEEP_LINKS,
   GITHUB_FAILED_CONCLUSIONS,
   patchActionableSchema,
@@ -56,6 +57,7 @@ const COMPLETION_CODE_TTL_MS = 10 * 60 * 1000
 const REFRESH_SKEW_MS = 5 * 60 * 1000
 const EMAIL_SENDS_PER_MINUTE = 5
 const API_BODY_LIMIT = 64 * 1024
+const REPORT_BODY_LIMIT = 512 * 1024
 const WEBHOOK_BODY_LIMIT = 1024 * 1024
 const INBOX_RESPONSE_BYTES = 4 * 1024 * 1024
 const INBOX_PAGE_SIZE = 100
@@ -154,8 +156,9 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
 
   const tooLarge = (c: Ctx) => c.json({ error: 'payload_too_large' }, 413)
   const apiBodyLimit = bodyLimit({ maxSize: API_BODY_LIMIT, onError: tooLarge })
+  const reportBodyLimit = bodyLimit({ maxSize: REPORT_BODY_LIMIT, onError: tooLarge })
   const webhookBodyLimit = bodyLimit({ maxSize: WEBHOOK_BODY_LIMIT, onError: tooLarge })
-  app.use((c, next) => (c.req.path.startsWith('/webhooks/') ? webhookBodyLimit : apiBodyLimit)(c, next))
+  app.use((c, next) => (c.req.path.startsWith('/webhooks/') ? webhookBodyLimit : c.req.path === '/v1/reports' ? reportBodyLimit : apiBodyLimit)(c, next))
   app.get('/health', (c) => c.json({ ok: true }))
 
   const authenticateDevice = (rateLimited: boolean) =>
@@ -311,6 +314,12 @@ export function createApp(fetchImpl: typeof fetch = (input, init) => fetch(input
   app.post('/v1/test-actionable', deviceAuth, (c) => createActionable(c, 'Test', SAMPLE_ACTIONABLE))
 
   app.post('/v1/actionables', tokenAuth, json(createActionableSchema), (c) => createActionable(c, c.get('tokenName')!, c.req.valid('json')))
+
+  app.post('/v1/reports', tokenAuth, json(createReportSchema), async (c) => {
+    const id = crypto.randomUUID()
+    await enqueue(c.env.DB, [c.get('userId')], { kind: 'report.create', id, tokenName: c.get('tokenName')!, request: c.req.valid('json') })
+    return c.json({ id }, 201)
+  })
 
   app.patch('/v1/actionables/:id', tokenAuth, json(patchActionableSchema), async (c) => {
     await enqueue(c.env.DB, [c.get('userId')], { kind: 'actionable.update', target: c.req.param('id'), patch: c.req.valid('json') })

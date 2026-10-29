@@ -52,6 +52,8 @@ function itemSignal(item: InboxItem): IngestSignal {
         actor: p.tokenName,
       }
     }
+    case 'report.create':
+      return { ...base, title: `Report ${p.request.title}` }
     case 'actionable.update':
       return { ...base, externalKey: p.target, title: `Update ${p.target}` }
     case 'actionable.dismiss':
@@ -68,6 +70,9 @@ async function handleInboxItem(ctx: Ctx, item: InboxItem, signal: IngestSignal, 
   switch (p.kind) {
     case 'actionable.create':
       await ctx.emit(signal)
+      return
+    case 'report.create':
+      ctx.deps.reports.upsert(p.request, p.id)
       return
     case 'actionable.update':
       if (ctx.admit(signal)) ctx.deps.sink.applyPatch(p.target, p.patch)

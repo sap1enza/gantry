@@ -1,5 +1,6 @@
 import { TAGS } from '@gantry/shared'
 import { describe, expect, it, vi } from 'vitest'
+import { USER } from './board'
 import { flush, setup, signal } from './testing'
 
 const HOUR = 3_600_000
@@ -49,6 +50,18 @@ describe('ingest dedupe', () => {
     board.create({ title: 'Untagged' })
     board.edit(id!, { tags: ['bug'] })
     expect(board.snapshot({ tags: ['bug', 'other'] }).actionables.map((a) => a.id)).toEqual([id])
+  })
+
+  it('limits the snapshot to cards created or signalled today', async () => {
+    const { board, advance } = setup()
+    const old = board.ingest(signal({ externalKey: 'old' })).actionableId!
+    const stale = board.ingest(signal({ externalKey: 'stale' })).actionableId!
+    advance(2 * DAY)
+    const fresh = board.ingest(signal({ externalKey: 'fresh' })).actionableId!
+    board.ingest(signal({ externalKey: 'old', title: 'Again' }))
+    await board.dismissCard(stale, USER)
+    expect(board.ingest(signal({ externalKey: 'stale' })).outcome).toBe('ignored:duplicate')
+    expect(board.snapshot({ today: true, showDismissed: true }).actionables.map((a) => a.id).sort()).toEqual([old, fresh].sort())
   })
 
   it('keeps user edits and removed tags when the source signals again', () => {

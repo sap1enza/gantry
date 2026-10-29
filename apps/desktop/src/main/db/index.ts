@@ -34,6 +34,7 @@ const MIGRATIONS = [
   CREATE INDEX actionables_agent_state ON actionables (agent_state);
   `,
   `DELETE FROM transcript WHERE json_extract(event, '$.type') = 'raw';`,
+  `CREATE TABLE reports (id TEXT PRIMARY KEY, dedupe_key TEXT UNIQUE, data TEXT NOT NULL);`,
 ]
 
 export function openDb(path: string): Db {

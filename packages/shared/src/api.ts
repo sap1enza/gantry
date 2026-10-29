@@ -18,6 +18,16 @@ export const createActionableSchema = z.object({
 })
 export type CreateActionableRequest = z.infer<typeof createActionableSchema>
 
+export const createReportSchema = z.object({
+  title: z.string().min(1).max(300),
+  body: z.string().min(1).max(100_000),
+  source: z.object({ name: z.string().min(1).max(80) }).optional(),
+  external_id: z.string().min(1).max(200).optional(),
+  links: z.array(link).max(20).optional(),
+  tags: z.array(z.string().min(1).max(60)).max(20).optional(),
+})
+export type CreateReportRequest = z.infer<typeof createReportSchema>
+
 export const patchActionableSchema = z
   .object({
     title: z.string().min(1).max(300).optional(),
@@ -37,6 +47,7 @@ export type OAuthProvider = 'github'
 
 export type InboxPayload =
   | { kind: 'actionable.create'; id: string; tokenName: string; request: CreateActionableRequest }
+  | { kind: 'report.create'; id: string; tokenName: string; request: CreateReportRequest }
   | { kind: 'actionable.update'; target: string; patch: PatchActionableRequest }
   | { kind: 'actionable.dismiss'; target: string }
   | { kind: 'github.webhook'; event: string; deliveryId: string; payload: unknown }

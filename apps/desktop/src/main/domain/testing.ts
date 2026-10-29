@@ -4,6 +4,7 @@ import { openDb } from '../db'
 import { createRepositoryStore, createSettingsStore, jsonTable } from '../db/stores'
 import type { Exec } from '../system/exec'
 import { Board } from './board'
+import { Reports } from './reports'
 
 export class FakeProvider implements AgentProvider {
   readonly id = 'claude'
@@ -69,6 +70,7 @@ export function setup() {
     push: (p) => pushes.push(p),
     now: () => new Date(now),
   })
+  const reports = new Reports({ db, push: (p) => pushes.push(p), now: () => new Date(now) })
   const provider = new FakeProvider()
   const worktrees = new Map<string, string>()
   const strays = new Set<string>()
@@ -108,6 +110,7 @@ export function setup() {
     settings,
     repos,
     repo,
+    reports,
     pushes,
     worktrees,
     strays,
