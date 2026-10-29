@@ -201,6 +201,7 @@ Scope: selected repositories.
 | PRs with merge conflicts | PRs authored by me, mergeable=false | mergeable or closed |
 | PRs with changes requested | PRs authored by me, review state CHANGES_REQUESTED | approved/dismissed or closed |
 | Review requests | review requested of me specifically (team requests ignored) | review submitted or PR closed |
+| Review comments | comment-only review (not approve / request changes) by someone else on my PR (webhook only) | I comment or review on the PR, or PR closed |
 | Mentions | @me in issue/PR comments | user replied in thread |
 | Dependabot alerts | alerts in selected repos ≥ severity threshold (default high); tagged Low/Moderate/High/Critical, priority low/normal/high/urgent | alert fixed/dismissed |
 | Code scanning vulnerabilities | open code scanning alerts (Security and quality tab) in selected repos ≥ severity threshold (default high); same severity tags/priority | alert fixed/closed |

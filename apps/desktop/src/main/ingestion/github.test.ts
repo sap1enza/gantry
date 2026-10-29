@@ -99,6 +99,17 @@ describe('githubWebhook', () => {
     expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.mention', externalKey: issue.html_url, reason: 'Replied' })
   })
 
+  it('signals comment-only reviews on my pull requests and resolves them when I reply', async () => {
+    const { ctx, deps, ingested } = setup()
+    const pr = { url: 'https://api.github.com/repos/acme/app/pulls/9', html_url: 'https://github.com/acme/app/pull/9', number: 9, title: 'Feature', user: { login: 'lucas' } }
+    const review = (login: string) => ({ state: 'commented', body: '', html_url: `${pr.html_url}#review`, user: { login } })
+    await githubWebhook(ctx, 'pull_request_review', { action: 'submitted', repository, pull_request: pr, review: review('ana') })
+    expect(ingested()).toEqual(['github.review_comment'])
+    expect(deps.sink.ingest.mock.calls[0]![0].body).toBe('@ana: Left review comments')
+    await githubWebhook(ctx, 'issue_comment', { action: 'created', repository, issue: pr, comment: { html_url: `${pr.html_url}#c1`, body: 'thanks', user: { login: 'lucas' } } })
+    expect(deps.sink.resolve).toHaveBeenCalledWith({ trigger: 'github.review_comment', externalKey: pr.html_url, reason: 'Replied' })
+  })
+
   it('filters dependabot alerts below the threshold and resolves fixed ones', async () => {
     const { ctx, deps, ingested } = setup()
     const alert = (severity: string, n: number) => ({ html_url: `https://github.com/acme/app/security/dependabot/${n}`, number: n, security_advisory: { severity, summary: `vuln ${n}` } })

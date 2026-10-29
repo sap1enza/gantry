@@ -4,7 +4,7 @@ import { HttpError, isFatal, report, type Ctx, type EmitOptions } from './contex
 const API = 'https://api.github.com'
 const SOURCE = { kind: 'github', name: 'GitHub' } as const
 const CONCURRENCY = 4
-const PR_TRIGGERS: TriggerId[] = ['github.ci_failed', 'github.merge_conflict', 'github.changes_requested', 'github.review_requested', 'github.mention']
+const PR_TRIGGERS: TriggerId[] = ['github.ci_failed', 'github.merge_conflict', 'github.changes_requested', 'github.review_requested', 'github.review_comment', 'github.mention']
 
 interface User {
   login: string
@@ -204,9 +204,23 @@ export async function githubWebhook(ctx: Ctx, event: string, p: WebhookPayload) 
       if (p.action !== 'submitted') return
       if (isMe(review.user)) {
         resolve(ctx, 'github.review_requested', pr.html_url, 'Review submitted')
+        resolve(ctx, 'github.review_comment', pr.html_url, 'Replied')
         resolve(ctx, 'github.mention', pr.html_url, 'Replied')
         return
       }
+      if (isMe(pr.user) && review.state === 'commented')
+        return emitTracked(
+          ctx,
+          signal(ctx, 'github.review_comment', pr, repo, {
+            body: `@${review.user.login}: ${review.body || 'Left review comments'}`,
+            links: [
+              { label: `${repo}#${pr.number}`, url: pr.html_url },
+              { label: 'Review', url: review.html_url },
+            ],
+            actor: review.user.login,
+          }),
+          { filtered },
+        )
       if (isMe(pr.user) && review.state === 'changes_requested')
         await emitTracked(ctx, signal(ctx, 'github.changes_requested', pr, repo, { body: review.body ?? undefined, actor: review.user.login }), { filtered })
       if (isMe(pr.user) && review.state === 'approved') resolve(ctx, 'github.changes_requested', pr.html_url, 'Pull request approved')
@@ -218,7 +232,10 @@ export async function githubWebhook(ctx: Ctx, event: string, p: WebhookPayload) 
       const thread = p.issue ?? p.pull_request!
       const comment = p.comment!
       if (p.action !== 'created') return
-      if (isMe(comment.user)) return resolve(ctx, 'github.mention', thread.html_url, 'Replied')
+      if (isMe(comment.user)) {
+        resolve(ctx, 'github.review_comment', thread.html_url, 'Replied')
+        return resolve(ctx, 'github.mention', thread.html_url, 'Replied')
+      }
       if (mentions(comment.body, me)) await emitMention(ctx, thread, repo, comment, filtered)
       return
     }
