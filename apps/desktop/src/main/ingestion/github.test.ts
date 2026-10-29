@@ -110,6 +110,26 @@ describe('githubWebhook', () => {
     expect(deps.sink.resolve).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'github.dependabot', reason: 'Alert fixed' }))
   })
 
+  it('tags dependabot alerts with their severity and sets priority', async () => {
+    const { ctx, deps } = setup()
+    const alert = { html_url: 'https://github.com/acme/app/security/dependabot/3', number: 3, security_advisory: { severity: 'critical', summary: 'RCE' } }
+    await githubWebhook(ctx, 'dependabot_alert', { action: 'created', repository, alert })
+    expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ tags: ['Critical'], priority: 'urgent' })
+  })
+
+  it('signals code scanning alerts at or above the threshold and resolves fixed ones', async () => {
+    const { ctx, deps, ingested } = setup()
+    const alert = (rule: object, n: number) => ({ html_url: `https://github.com/acme/app/security/code-scanning/${n}`, number: n, rule })
+    await githubWebhook(ctx, 'code_scanning_alert', { action: 'created', repository, alert: alert({ description: 'XSS', security_severity_level: 'medium' }, 1) })
+    await githubWebhook(ctx, 'code_scanning_alert', { action: 'created', repository, alert: alert({ description: 'SQL injection', security_severity_level: 'high' }, 2) })
+    await githubWebhook(ctx, 'code_scanning_alert', { action: 'created', repository, alert: alert({ description: 'Bad code', severity: 'error' }, 3) })
+    expect(ingested()).toEqual(['github.code_scanning', 'github.code_scanning'])
+    expect(deps.sink.ingest.mock.calls[0]![0]).toMatchObject({ title: 'SQL injection', tags: ['High'], priority: 'high' })
+    expect(deps.sink.logIgnored.mock.calls[0]![2]).toBe('Severity medium is below high')
+    await githubWebhook(ctx, 'code_scanning_alert', { action: 'fixed', repository, alert: alert({ description: 'SQL injection' }, 2) })
+    expect(deps.sink.resolve).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'github.code_scanning', reason: 'Alert fixed' }))
+  })
+
   it('signals issues assigned to me, and opened issues only when scope is all', async () => {
     const { ctx, deps, ingested } = setup()
     deps.settings.triggers = { ...deps.settings.triggers, 'github.issue': true }

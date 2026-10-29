@@ -22,6 +22,9 @@ export const CLAUDE_MODELS = [
   { id: 'claude-fable-5-1', label: 'Fable 5.1' },
 ]
 
+export const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
+export type Severity = (typeof SEVERITIES)[number]
+
 export interface Settings {
   workerUrl: string
   defaultProvider: string
@@ -36,7 +39,7 @@ export interface Settings {
   archiveDoneAfterDays: number
   activityRetentionDays: number
   triggers: Record<TriggerId, boolean>
-  github: { repositories: string[]; dependabotMinSeverity: 'low' | 'medium' | 'high' | 'critical'; issuesScope: 'assigned' | 'all' }
+  github: { repositories: string[]; dependabotMinSeverity: Severity; codeScanningMinSeverity: Severity; issuesScope: 'assigned' | 'all' }
   notifications: { needsInput: boolean; completed: boolean; failed: boolean; newActionable: boolean }
   launchAtLogin: boolean
   appearance: Appearance
@@ -58,7 +61,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveDoneAfterDays: 7,
   activityRetentionDays: 90,
   triggers: DEFAULT_ENABLED_TRIGGERS,
-  github: { repositories: [], dependabotMinSeverity: 'high', issuesScope: 'assigned' },
+  github: { repositories: [], dependabotMinSeverity: 'high', codeScanningMinSeverity: 'high', issuesScope: 'assigned' },
   notifications: { needsInput: true, completed: true, failed: true, newActionable: false },
   launchAtLogin: false,
   appearance: 'system',

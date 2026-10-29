@@ -1,4 +1,4 @@
-import { TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId } from '@gantry/shared'
+import { TRIGGERS, type ApiTokenInfo, type ConnectionInfo, type CreatedApiToken, type OAuthProvider, type Settings, type TriggerId, SEVERITIES } from '@gantry/shared'
 import { Activity, ArrowUpRight, Copy, ExternalLink, Info, KeyRound, RefreshCw, Send, ShieldCheck, Webhook, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
@@ -6,7 +6,7 @@ import { api } from '../bridge'
 import { ago, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
 
 const STATUS_LABEL = { connected: 'Connected', reconnect_required: 'Reconnect required', disconnected: 'Disconnected' } as const
-const SEVERITIES = (['low', 'medium', 'high', 'critical'] as const).map((v) => ({ value: v, label: `≥ ${v}` }))
+const SEVERITY_OPTIONS = SEVERITIES.map((v) => ({ value: v, label: `≥ ${v === 'medium' ? 'moderate' : v}` }))
 const ISSUE_SCOPES = [
   { value: 'assigned', label: 'Assigned to me' },
   { value: 'all', label: 'Any new issue' },
@@ -193,7 +193,10 @@ function GithubCard({ info, settings }: { info: ConnectionInfo; settings: Settin
           {triggersFor('github').map((id) => (
             <TriggerRow key={id} id={id} settings={settings}>
               {id === 'github.dependabot' && (
-                <Select label="Minimum severity" value={settings.github.dependabotMinSeverity} options={SEVERITIES} onChange={(v) => setGithub({ dependabotMinSeverity: v })} />
+                <Select label="Minimum severity" value={settings.github.dependabotMinSeverity} options={SEVERITY_OPTIONS} onChange={(v) => setGithub({ dependabotMinSeverity: v })} />
+              )}
+              {id === 'github.code_scanning' && (
+                <Select label="Minimum severity" value={settings.github.codeScanningMinSeverity} options={SEVERITY_OPTIONS} onChange={(v) => setGithub({ codeScanningMinSeverity: v })} />
               )}
               {id === 'github.issue' && (
                 <Select label="Issues scope" value={settings.github.issuesScope} options={ISSUE_SCOPES} onChange={(v) => setGithub({ issuesScope: v })} />

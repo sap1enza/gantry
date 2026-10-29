@@ -73,6 +73,7 @@ const GITHUB_HANDLED_ACTIONS: Record<string, string[]> = {
   issue_comment: ['created'],
   issues: ['opened', 'assigned', 'closed'],
   dependabot_alert: ['created', 'reopened', 'auto_reopened', 'fixed', 'dismissed', 'auto_dismissed'],
+  code_scanning_alert: ['created', 'reopened', 'reopened_by_user', 'fixed', 'closed_by_user'],
 }
 
 type GithubPayload = {

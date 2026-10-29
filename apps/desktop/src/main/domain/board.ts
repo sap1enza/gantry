@@ -327,6 +327,7 @@ export class Board implements IngestSink {
         const removedTags = (a.metadata.removedTags as string[] | undefined) ?? []
         if (!userEdited.includes('title')) a.title = signal.title
         if (signal.body !== undefined && !userEdited.includes('body')) a.body = signal.body
+        if (signal.priority && !userEdited.includes('priority')) a.priority = signal.priority
         if (signal.repository) a.repository = signal.repository
         a.links = mergeLinks(a.links, signal.links ?? [])
         a.tags = unique([...a.tags, ...tags.filter((t) => !removedTags.includes(t))])
@@ -460,7 +461,7 @@ export class Board implements IngestSink {
           a.metadata.removedTags = unique([...((a.metadata.removedTags as string[] | undefined) ?? []), ...removed]).filter((t) => !tags.includes(t))
           a.tags = tags
         }
-        a.metadata.userEdited = unique([...userEdited, ...(title ? ['title'] : []), ...(patch.body !== undefined ? ['body'] : [])])
+        a.metadata.userEdited = unique([...userEdited, ...(title ? ['title'] : []), ...(patch.body !== undefined ? ['body'] : []), ...(patch.priority !== undefined ? ['priority'] : [])])
       },
       { type: 'edited', actor: USER },
     )

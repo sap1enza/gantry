@@ -1,9 +1,8 @@
-import { GITHUB_FAILED_CONCLUSIONS, unique, type IngestSignal, type Settings, type TriggerId } from '@gantry/shared'
+import { GITHUB_FAILED_CONCLUSIONS, SEVERITIES, unique, type IngestSignal, type Priority, type Settings, type Severity, type TriggerId } from '@gantry/shared'
 import { HttpError, isFatal, report, type Ctx, type EmitOptions } from './context'
 
 const API = 'https://api.github.com'
 const SOURCE = { kind: 'github', name: 'GitHub' } as const
-const SEVERITY = ['low', 'medium', 'high', 'critical']
 const CONCURRENCY = 4
 const PR_TRIGGERS: TriggerId[] = ['github.ci_failed', 'github.merge_conflict', 'github.changes_requested', 'github.review_requested', 'github.mention']
 
@@ -43,6 +42,13 @@ interface Alert {
   security_advisory?: { summary?: string; severity?: string }
   security_vulnerability?: { severity?: string; package?: { name?: string } }
 }
+interface CodeScanningAlert {
+  html_url: string
+  number: number
+  rule?: { description?: string; severity?: string | null; security_severity_level?: string | null }
+  tool?: { name?: string }
+  most_recent_instance?: { location?: { path?: string; start_line?: number }; message?: { text?: string } }
+}
 interface WebhookPayload {
   action?: string
   repository?: Repo
@@ -53,7 +59,7 @@ interface WebhookPayload {
   requested_reviewer?: User
   requested_team?: unknown
   assignee?: User
-  alert?: Alert
+  alert?: Alert & CodeScanningAlert
   check_suite?: { conclusion?: string | null; app?: { name?: string }; pull_requests?: { url: string }[] }
   check_run?: { conclusion?: string | null; name?: string; pull_requests?: { url: string }[] }
 }
@@ -97,8 +103,15 @@ const sameLogin = (u: User | null | undefined, login: string) => u?.login.toLowe
 export const mentions = (text: string | null | undefined, login: string) =>
   new RegExp(`(^|[^\\w-])@${login.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(text ?? '')
 
-const severityAtLeast = (severity: string | undefined, min: Settings['github']['dependabotMinSeverity']) =>
-  SEVERITY.indexOf(severity ?? 'low') >= SEVERITY.indexOf(min)
+const severityAtLeast = (severity: Severity, min: Severity) => SEVERITIES.indexOf(severity) >= SEVERITIES.indexOf(min)
+const belowMin = (severity: Severity, min: Severity) => (severityAtLeast(severity, min) ? undefined : `Severity ${severity} is below ${min}`)
+const SEVERITY_TAG: Record<Severity, string> = { low: 'Low', medium: 'Moderate', high: 'High', critical: 'Critical' }
+const SEVERITY_PRIORITY: Record<Severity, Priority> = { low: 'low', medium: 'normal', high: 'high', critical: 'urgent' }
+const RULE_SEVERITY: Record<string, Severity> = { error: 'high', warning: 'medium', note: 'low' }
+const asSeverity = (s?: string | null): Severity => (s === 'moderate' ? 'medium' : SEVERITIES.find((v) => v === s)) ?? 'low'
+const dependabotSeverity = (a: Alert) => asSeverity(a.security_advisory?.severity ?? a.security_vulnerability?.severity)
+const codeScanningSeverity = (a: CodeScanningAlert) => (a.rule?.security_severity_level ? asSeverity(a.rule.security_severity_level) : (RULE_SEVERITY[a.rule?.severity ?? ''] ?? 'low'))
+const severityFields = (severity: Severity) => ({ tags: [SEVERITY_TAG[severity]], priority: SEVERITY_PRIORITY[severity] })
 
 function repoFilter(settings: Settings, repo: string | undefined) {
   const selected = settings.github.repositories
@@ -107,9 +120,9 @@ function repoFilter(settings: Settings, repo: string | undefined) {
 }
 
 export function apiUrlFor(htmlUrl: string) {
-  const m = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(pull|issues|security\/dependabot)\/(\d+)/.exec(htmlUrl)
+  const m = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(pull|issues|security\/dependabot|security\/code-scanning)\/(\d+)/.exec(htmlUrl)
   if (!m) return undefined
-  const kind = { pull: 'pulls', issues: 'issues', 'security/dependabot': 'dependabot/alerts' }[m[2]!]
+  const kind = { pull: 'pulls', issues: 'issues', 'security/dependabot': 'dependabot/alerts', 'security/code-scanning': 'code-scanning/alerts' }[m[2]!]
   return { repo: m[1]!, kind: m[2]!, number: m[3]!, url: `${API}/repos/${m[1]}/${kind}/${m[3]}` }
 }
 
@@ -213,11 +226,14 @@ export async function githubWebhook(ctx: Ctx, event: string, p: WebhookPayload) 
       const alert = p.alert!
       if (['fixed', 'dismissed', 'auto_dismissed'].includes(p.action ?? '')) return resolve(ctx, 'github.dependabot', alert.html_url, `Alert ${p.action?.replace('_', ' ')}`)
       if (!['created', 'reopened', 'auto_reopened'].includes(p.action ?? '')) return
-      const min = ctx.settings().github.dependabotMinSeverity
-      const severity = alert.security_advisory?.severity ?? alert.security_vulnerability?.severity
-      await emitTracked(ctx, alertSignal(ctx, alert, repo), {
-        filtered: filtered ?? (severityAtLeast(severity, min) ? undefined : `Severity ${severity} is below ${min}`),
-      })
+      await emitTracked(ctx, alertSignal(ctx, alert, repo), { filtered: filtered ?? belowMin(dependabotSeverity(alert), ctx.settings().github.dependabotMinSeverity) })
+      return
+    }
+    case 'code_scanning_alert': {
+      const alert = p.alert!
+      if (['fixed', 'closed_by_user'].includes(p.action ?? '')) return resolve(ctx, 'github.code_scanning', alert.html_url, `Alert ${p.action === 'fixed' ? 'fixed' : 'closed'}`)
+      if (!['created', 'reopened', 'reopened_by_user'].includes(p.action ?? '')) return
+      await emitTracked(ctx, codeScanningSignal(ctx, alert, repo), { filtered: filtered ?? belowMin(codeScanningSeverity(alert), ctx.settings().github.codeScanningMinSeverity) })
       return
     }
     case 'issues': {
@@ -255,6 +271,15 @@ function alertSignal(ctx: Ctx, alert: Alert, repo: string) {
   const title = alert.security_advisory?.summary ?? `Dependabot alert in ${pkg ?? repo}`
   return signal(ctx, 'github.dependabot', { html_url: alert.html_url, number: alert.number, title }, repo, {
     links: [{ label: `${repo} Dependabot #${alert.number}`, url: alert.html_url }],
+    ...severityFields(dependabotSeverity(alert)),
+  })
+}
+
+function codeScanningSignal(ctx: Ctx, alert: CodeScanningAlert, repo: string) {
+  const title = alert.rule?.description ?? `Code scanning alert in ${repo}`
+  return signal(ctx, 'github.code_scanning', { html_url: alert.html_url, number: alert.number, title }, repo, {
+    links: [{ label: `${repo} Code scanning #${alert.number}`, url: alert.html_url }],
+    ...severityFields(codeScanningSeverity(alert)),
   })
 }
 
@@ -333,6 +358,7 @@ const RESOLVE_REASON: Partial<Record<TriggerId, string>> = {
   'github.changes_requested': 'Approved, dismissed, or pull request closed',
   'github.review_requested': 'Review submitted or pull request closed',
   'github.dependabot': 'Alert fixed or dismissed',
+  'github.code_scanning': 'Alert fixed or closed',
   'github.issue': 'Issue closed',
 }
 
@@ -375,11 +401,13 @@ export async function reconcileGithub(ctx: Ctx) {
   const current = currentFromSearch(ctx, { authored, review, issues }, prev)
   if (assignedOnly) ctx.deps.kv.delete('github.issuesSince')
   const repos = settings.github.repositories
-  const [alerts, repoIssues] = await Promise.all([
+  const [alerts, codeAlerts, repoIssues] = await Promise.all([
     ctx.triggerOn('github.dependabot') ? recheck(() => openAlerts(ctx, settings, repos)) : undefined,
+    ctx.triggerOn('github.code_scanning') ? recheck(() => openCodeScanningAlerts(ctx, settings, repos)) : undefined,
     !assignedOnly && ctx.triggerOn('github.issue') ? recheck(() => openIssues(ctx, repos, prev['github.issue'] ?? [])) : undefined,
   ])
   current['github.dependabot'] = alerts
+  current['github.code_scanning'] = codeAlerts
   if (!assignedOnly) current['github.issue'] = repoIssues
   await applyReconciliation(ctx, current, prev)
   await reconcileMentions(ctx, me)
@@ -406,13 +434,25 @@ async function backfillMentions(ctx: Ctx, me: string) {
 
 async function openAlerts(ctx: Ctx, settings: Settings, repos: string[]): Promise<Tracked> {
   const signals = new Map<string, IngestSignal>()
-  const severities = SEVERITY.slice(SEVERITY.indexOf(settings.github.dependabotMinSeverity)).join(',')
+  const severities = SEVERITIES.slice(SEVERITIES.indexOf(settings.github.dependabotMinSeverity)).join(',')
   await eachLimit(repos, async (fullName) => {
     const alerts = await ghAll<Alert>(ctx, `/repos/${fullName}/dependabot/alerts?state=open&per_page=100&severity=${severities}`).catch((e) => {
       if (e instanceof HttpError && (e.status === 403 || e.status === 404)) return []
       throw e
     })
     for (const a of alerts) signals.set(a.html_url, alertSignal(ctx, a, fullName))
+  })
+  return { signals, complete: true }
+}
+
+async function openCodeScanningAlerts(ctx: Ctx, settings: Settings, repos: string[]): Promise<Tracked> {
+  const signals = new Map<string, IngestSignal>()
+  await eachLimit(repos, async (fullName) => {
+    const alerts = await ghAll<CodeScanningAlert>(ctx, `/repos/${fullName}/code-scanning/alerts?state=open&per_page=100`).catch((e) => {
+      if (e instanceof HttpError && (e.status === 403 || e.status === 404)) return []
+      throw e
+    })
+    for (const a of alerts) if (severityAtLeast(codeScanningSeverity(a), settings.github.codeScanningMinSeverity)) signals.set(a.html_url, codeScanningSignal(ctx, a, fullName))
   })
   return { signals, complete: true }
 }
@@ -438,7 +478,7 @@ async function openIssues(ctx: Ctx, repos: string[], tracked: string[]): Promise
 
 export async function mentionResolution(ctx: Ctx, me: string, htmlUrl: string) {
   const target = apiUrlFor(htmlUrl)
-  if (!target || target.kind === 'security/dependabot') return undefined
+  if (!target || target.kind.startsWith('security/')) return undefined
   const base = `/repos/${target.repo}`
   const thread = await gh<{ state: string; pull_request?: { merged_at: string | null } }>(ctx, `${base}/issues/${target.number}`).catch((e) => {
     if (e instanceof HttpError && [404, 410].includes(e.status)) return undefined
@@ -495,6 +535,19 @@ export async function githubContext(ctx: Ctx, htmlUrl: string) {
   if (target.kind === 'issues') {
     const issue = await gh<Issue & { body?: string }>(ctx, target.url)
     return `Issue: ${issue.title}\n\n${issue.body ?? ''}`
+  }
+  if (target.kind === 'security/code-scanning') {
+    const alert = await gh<CodeScanningAlert & { rule?: { full_description?: string; help?: string } }>(ctx, target.url)
+    const at = alert.most_recent_instance?.location
+    return [
+      `Code scanning (${alert.tool?.name ?? 'unknown tool'}, ${codeScanningSeverity(alert)}): ${alert.rule?.description ?? ''}`,
+      at?.path ? `Location: ${at.path}${at.start_line ? `:${at.start_line}` : ''}` : undefined,
+      alert.most_recent_instance?.message?.text,
+      alert.rule?.full_description,
+      alert.rule?.help,
+    ]
+      .filter(Boolean)
+      .join('\n\n')
   }
   const alert = await gh<Alert & { security_advisory?: { description?: string } }>(ctx, target.url)
   return `Dependabot: ${alert.security_advisory?.summary ?? ''}\nPackage: ${alert.security_vulnerability?.package?.name ?? '?'}\n\n${alert.security_advisory?.description ?? ''}`

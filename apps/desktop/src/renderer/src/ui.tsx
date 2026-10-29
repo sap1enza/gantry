@@ -85,8 +85,8 @@ export function ActionButton({ action, onClick, large }: { action: CardAction; o
 }
 
 const TAG_TONE: [RegExp, string][] = [
-  [/fail|ci failed|changes requested|disconnected/i, 'red'],
-  [/needs|ai detected|conflict|stopped|queued|paused|awaiting|reconnect/i, 'amber'],
+  [/fail|ci failed|changes requested|disconnected|^critical$|^high$/i, 'red'],
+  [/needs|^moderate$|conflict|stopped|queued|paused|awaiting|reconnect/i, 'amber'],
   [/completed|resolved|connected|enabled/i, 'green'],
   [/running/i, 'blue'],
 ]
