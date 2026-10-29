@@ -122,7 +122,7 @@ code, .mono { font-family: var(--mono); font-size: 11px; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 500; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.06); background: var(--accent); }
-.btn.danger { color: var(--red); }
+.btn.danger, .menu-item.danger { color: var(--red); }
 .btn.danger.solid { background: var(--red); border-color: var(--red); color: #fff; }
 .btn.sm { height: 25px; padding: 0 8px; font-size: 11px; gap: 5px; }
 .btn.ghost { border-color: transparent; background: none; }

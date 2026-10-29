@@ -19,7 +19,6 @@ export const TAGS = {
   stopped: 'Stopped',
   failed: 'Failed',
   queued: 'Queued',
-  snoozed: 'Snoozed',
   needsRepository: 'Needs repository',
   sourceDisconnected: 'Source disconnected',
 } as const
@@ -86,7 +85,6 @@ export interface Actionable {
   position: number
   agentState?: AgentState
   pendingQuestion?: PendingQuestion
-  snoozedUntil?: string
   dismissedAt?: string
   archivedAt?: string
   doneAt?: string

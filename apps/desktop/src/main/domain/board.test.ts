@@ -81,18 +81,6 @@ describe('ingest dedupe', () => {
     expect(board.must(actionableId!).doneAt).toBeUndefined()
   })
 
-  it('returns snoozed cards to To-do', () => {
-    const { board } = setup()
-    board.createColumn('Waiting', 1)
-    const waiting = board.columns().find((c) => c.name === 'Waiting')!.id
-    const { actionableId: id } = board.ingest(signal())
-    board.move(id!, waiting, 0)
-    board.snooze(id!, '2026-10-28T09:00:00.000Z')
-    board.ingest(signal())
-    expect(board.must(id!).column).toBe('todo')
-    expect(board.must(id!).snoozedUntil).toBeUndefined()
-  })
-
   it('keeps dismissed cards dismissed unless the trigger type is new', async () => {
     const { board } = setup()
     const { actionableId: id } = board.ingest(signal())
@@ -282,16 +270,6 @@ describe('guarded user transitions', () => {
     expect(board.must(id!).doneAt).toBeUndefined()
   })
 
-  it('refuses to snooze from Review or into the past', async () => {
-    const { board, runner, provider } = setup()
-    const { actionableId: id } = board.ingest(signal())
-    expect(() => board.snooze(id!, '2026-10-27T11:00:00.000Z')).toThrow()
-    await runner.start(id!)
-    await flush()
-    provider.emit(id!, { type: 'state', state: 'completed' })
-    expect(() => board.snooze(id!, '2026-10-28T09:00:00.000Z')).toThrow()
-  })
-
   it('reorders within a column', () => {
     const { board } = setup()
     const a = board.create({ title: 'A' })
@@ -314,85 +292,6 @@ describe('guarded user transitions', () => {
 })
 
 describe('housekeeping', () => {
-  it('unsnoozes expired cards', () => {
-    const { board, advance, eventTypes } = setup()
-    const { actionableId: id } = board.ingest(signal())
-    board.snooze(id!, '2026-10-27T13:00:00.000Z')
-    expect(board.snapshot().actionables).toHaveLength(0)
-    advance(HOUR)
-    board.housekeeping()
-    expect(board.must(id!).snoozedUntil).toBeUndefined()
-    expect(eventTypes(id)).toEqual(['received', 'snoozed', 'unsnoozed'])
-  })
-
-  it('returns expired snoozes to To-do tagged Snoozed until the user acts', () => {
-    const { board, advance } = setup()
-    const { actionableId: id } = board.ingest(signal())
-    board.createColumn('Later', 1)
-    const later = board.columns().find((c) => c.name === 'Later')!.id
-    board.move(id!, later, 0)
-    board.snooze(id!, '2026-10-27T13:00:00.000Z')
-    advance(HOUR)
-    board.housekeeping()
-    expect(board.must(id!)).toMatchObject({ column: 'todo', tags: expect.arrayContaining([TAGS.snoozed]) })
-    board.ingest(signal({ trigger: 'github.review_requested' }))
-    expect(board.must(id!).tags).toContain(TAGS.snoozed)
-    board.move(id!, 'todo', 0)
-    expect(board.must(id!).tags).not.toContain(TAGS.snoozed)
-  })
-
-  it('leaves cards finished while snoozed in Done', () => {
-    const { board, advance, eventTypes } = setup()
-    const { actionableId: id } = board.ingest(signal())
-    board.snooze(id!, '2026-10-27T13:00:00.000Z')
-    board.markDone(id!)
-    expect(board.must(id!).snoozedUntil).toBeUndefined()
-    advance(HOUR)
-    board.housekeeping()
-    expect(board.must(id!).column).toBe('done')
-    expect(board.must(id!).tags).not.toContain(TAGS.snoozed)
-    expect(eventTypes(id)).not.toContain('unsnoozed')
-  })
-
-  it('clears the snooze when a source resolves a card to Done', () => {
-    const { board } = setup()
-    const { actionableId: id } = board.ingest(signal())
-    board.snooze(id!, '2026-10-27T13:00:00.000Z')
-    board.resolve({ trigger: 'github.ci_failed', externalKey: signal().externalKey, reason: 'CI passed' })
-    expect(board.must(id!).column).toBe('done')
-    expect(board.must(id!).snoozedUntil).toBeUndefined()
-  })
-
-  it('starts a queued card when its snooze expires and a slot is free', async () => {
-    const { board, runner, settings, advance } = setup()
-    settings.update({ maxConcurrentAgents: 1 })
-    const a = board.ingest(signal({ externalKey: 'k1' })).actionableId!
-    const b = board.ingest(signal({ externalKey: 'k2' })).actionableId!
-    await runner.start(a)
-    await runner.start(b)
-    board.snooze(b, '2026-10-27T13:00:00.000Z')
-    await runner.stop(a)
-    expect(board.must(b).agentState).toBe('queued')
-    advance(HOUR)
-    board.housekeeping()
-    await flush()
-    expect(board.must(b).agentState).toBe('running')
-  })
-
-  it('starts a snoozed queued card when ingest clears its snooze', async () => {
-    const { board, runner, settings } = setup()
-    settings.update({ maxConcurrentAgents: 1 })
-    const a = board.ingest(signal({ externalKey: 'k1' })).actionableId!
-    const b = board.ingest(signal({ externalKey: 'k2' })).actionableId!
-    await runner.start(a)
-    await runner.start(b)
-    board.snooze(b, '2026-10-27T13:00:00.000Z')
-    await runner.stop(a)
-    board.ingest(signal({ externalKey: 'k2' }))
-    await flush()
-    expect(board.must(b).agentState).toBe('running')
-  })
-
   it('archives Done cards after archiveDoneAfterDays and prunes old activity', () => {
     const { board, advance } = setup()
     const { actionableId: id } = board.ingest(signal())

@@ -200,7 +200,7 @@ export class AgentRunner implements AgentControl {
     const cards = this.board.inColumn('in_progress')
     let active = cards.filter(isAgentActive).length
     const queued = cards
-      .filter((c) => c.agentState === 'queued' && !c.snoozedUntil && !c.dismissedAt)
+      .filter((c) => c.agentState === 'queued' && !c.dismissedAt)
       .sort((x, y) => (x.dispatch?.startedAt ?? '').localeCompare(y.dispatch?.startedAt ?? ''))
     const max = this.deps.settings().maxConcurrentAgents
     for (const card of queued) {
@@ -475,6 +475,20 @@ export class AgentRunner implements AgentControl {
       detail = removed.code === 0 ? 'Workspace removed' : `Workspace not removed: ${removed.output.trim()}`
     }
     this.board.markDone(id, detail)
+  }
+
+  async delete(id: string) {
+    this.board.must(id)
+    await this.releaseRun(id)
+    this.finishUpdates(id)
+    this.dispatches.delete(id)
+    const worktrees = this.board.recordedWorktrees(id).filter((w) => this.deps.exists(w.worktreePath))
+    for (const w of worktrees) {
+      const removed = await this.removeWorktree(w, true)
+      if (removed.code !== 0) throw new Error(`Workspace not removed: ${removed.output.trim()}`)
+    }
+    this.board.remove(id, worktrees.length ? 'Workspace removed' : undefined)
+    this.drain()
   }
 
   async move(id: string, column: ColumnId, position: number) {

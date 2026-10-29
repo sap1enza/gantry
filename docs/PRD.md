@@ -99,7 +99,6 @@ Actionable {
   column: string        // 'todo'|'in_progress'|'review'|'done'|<custom column id>
   position: number      // manual order within column
   agentState?: 'queued'|'running'|'paused'|'awaiting_input'|'completed'|'failed'|'stopped'
-  snoozedUntil?: Date
   dismissedAt?: Date
   archivedAt?: Date
   dispatch?: { provider, model, repository, worktreePath, permissionPreset, sessionId, startedAt, startedBy }
@@ -110,7 +109,7 @@ Actionable {
 
 **Dedupe**: one card per external entity. A new trigger on an existing entity:
 - Adds the tag, updates body/links, bumps `updatedAt`.
-- If card is Done (by user or resolved externally) or Snoozed → returns to To-do.
+- If card is Done (by user or resolved externally) → returns to To-do.
 - If dismissed by user → stays dismissed unless the trigger *type* is new for that card.
 
 ---
@@ -126,7 +125,7 @@ Actionable {
 - Review → Done: user clicks Done (triggers cleanup).
 - Review → In Progress: Reopen with feedback (resumes same session).
 - Any → Dismissed (archived; kills agent if running, using the same confirmation as Stop when "Confirm before stopping" is on).
-- Any → Snoozed (hidden; not allowed while agent running).
+- Any → Deleted (card menu: removes the card, its dispatches, transcript and agent workspaces after confirmation).
 - Manual move to custom columns: allowed from To-do, Review, Done, custom; from In Progress only when paused/stopped. Agents never run in a custom column.
 - Auto-resolve (GitHub only, per table in 8.1): To-do cards move to Done tagged `Resolved externally`; In Progress/Review cards get the tag only. API and manual cards never auto-resolve; they move only by user action.
 
@@ -134,24 +133,24 @@ Actionable {
 
 | Column | Buttons |
 |---|---|
-| To-do | ▶ Start · ⏱ Snooze · ✕ Dismiss |
+| To-do | ▶ Start · ✕ Dismiss |
 | In Progress (running / awaiting input) | ⏸ Pause · ■ Stop · ✕ Dismiss |
-| In Progress (paused / queued) | ▶ Resume · ■ Stop · ⏱ Snooze · ✕ Dismiss |
+| In Progress (paused / queued) | ▶ Resume · ■ Stop · ✕ Dismiss |
 | Review | ✓ Done · ↺ Reopen · ⌘ Open in terminal · ✕ Dismiss |
 | Done | none (… menu: Reopen to To-do, Dismiss) |
-| Custom | ▶ Start · ⏱ Snooze · ✕ Dismiss |
+| Custom | ▶ Start · ✕ Dismiss |
 
 **Card fields** (toggle via "Card fields"): Title (always), Source, Status/tags, Agent, Received time, Repository, Links, Priority. Persisted per user.
 
 **Ordering**: manual drag within To-do, Review, Done, custom. In Progress auto-sorted: awaiting_input > running > queued > paused, then start time. New cards insert at top. Sort dropdown: newest, oldest, priority, source.
 
-**Filters**: All sources / per source; All agents / per provider; Show snoozed; Show dismissed.
+**Filters**: All sources / per source; All agents / per provider; per tag; Show dismissed.
 
 **Header**: "N actionables · M agents running", Card fields, Add column, New actionable (manual: title, body, source name, links, repository, priority).
 
 **Details panel** (right, on card click): id, state tag, created time, title, source, body, links, dispatch block (agent, repository, workspace path, permissions, instructions), latest activity (events linked to this card, "View log" opens Activity filtered by card), action buttons, awaiting-input prompt + answer box when relevant.
 
-**Global search** (⌘K): title, body, source, id across all cards including Done/Dismissed/Snoozed. Enter opens the detail panel.
+**Global search** (⌘K): title, body, source, id across all cards including Done/Dismissed. Enter opens the detail panel.
 
 ---
 
@@ -242,7 +241,7 @@ Removed together with the Slack and email inputs.
 
 One view, filterable by event type, source, date, text, and actionable. Live updates. Export JSON/CSV. Retention setting (default 90 days).
 
-Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed` (card enters Review), `failed`, `done`, `reopened`, `dismissed`, `snoozed`, `unsnoozed`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected).
+Event types: `received` (tag: created / ignored:trigger-off / ignored:filtered / ignored:duplicate), `dispatched`, `agent_update`, `paused`, `resumed`, `awaiting_input`, `answered`, `stopped`, `completed` (card enters Review), `failed`, `done`, `reopened`, `dismissed`, `deleted`, `moved`, `resolved_externally`, `connection` (connected / reconnect required / disconnected).
 
 Every event stores `actionableId?`, `source`, `actor` (user / agent / source / Gantry), `title`, `detail`, `timestamp`. Clicking an event opens the card; the card panel lists its events.
 
@@ -254,14 +253,13 @@ Every event stores `actionableId?`, `source`, `actor` (user / agent / source / G
 
 **When work is done**: agent workspace — Delete / Keep / Ask each time (cleanup rule in section 7). Keep completed actionables (on → auto-archive from Done after N days, default 7, searchable; off → removed from board on Done, still in Activity).
 
-**Snooze presets**: 1 h, 3 h, tomorrow 9 am, next Monday, custom.
 
 
 **Notifications**: per type — agent needs input, agent completed, agent failed, new actionable. Click opens the card.
 
 **General**: launch at login, appearance (System/Light/Dark), activity retention, dock badge (count of cards awaiting input; toggle).
 
-**Keyboard shortcuts**: ⌘K search · ⌘N new actionable · ⌘1/2/3 Triage/Activity/Connections · ←/→ previous/next card · Enter open panel · Esc close panel · S start/resume · P pause · Z snooze · D dismiss · ⌘⏎ Done (in Review).
+**Keyboard shortcuts**: ⌘K search · ⌘N new actionable · ⌘1/2/3 Triage/Activity/Connections · ←/→ previous/next card · Enter open panel · Esc close panel · S start/resume · P pause · D dismiss · ⌘⏎ Done (in Review).
 
 **Account**: name, sign-in status, device id, sign out.
 

@@ -59,12 +59,11 @@ export interface AppState {
   closePanel(): void
   act(action: CardAction, a: Actionable, anchor?: HTMLElement): Promise<void>
   move(a: Actionable, column: ColumnId, position: number): Promise<void>
+  remove(a: Actionable): Promise<void>
   reopenFor?: string
   setReopenFor(id?: string): void
   dispatchFor?: { card: Actionable; preview: DispatchPreview }
   setDispatchFor(v?: { card: Actionable; preview: DispatchPreview }): void
-  snoozeFor?: { card: Actionable; anchor?: DOMRect }
-  setSnoozeFor(v?: { card: Actionable; anchor?: DOMRect }): void
   newOpen: boolean
   setNewOpen(v: boolean): void
   searchOpen: boolean
@@ -105,7 +104,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false)
   const [reopenFor, setReopenFor] = useState<string>()
   const [dispatchFor, setDispatchFor] = useState<AppState['dispatchFor']>()
-  const [snoozeFor, setSnoozeFor] = useState<AppState['snoozeFor']>()
   const [newOpen, setNewOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [showWelcome, setShowWelcome] = useState(false)
@@ -271,8 +269,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await run(api.board.dismiss(id))
           if (selectedId === id) setPanelOpen(false)
           return
-        case 'snooze':
-          return setSnoozeFor({ card: a, anchor: anchor?.getBoundingClientRect() })
         case 'done':
           return void (await markDone(a))
         case 'reopen':
@@ -287,7 +283,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [run, confirm, markDone, open],
   )
 
-  const overlayOpen = !!(dialog || dispatchFor || snoozeFor || newOpen || searchOpen)
+  const remove = useCallback(
+    async (a: Actionable) => {
+      const body = a.dispatch ? (
+        <>
+          Deletes the card, its transcript and the agent workspace at <code>{a.dispatch.worktreePath}</code>, including uncommitted changes. Remote branches and pull requests are kept.
+        </>
+      ) : (
+        'Deletes the card and its history.'
+      )
+      if (!(await confirm(`Delete ${a.displayId}?`, body, 'Delete', true))) return
+      await run(api.board.delete(a.id))
+      if (selectedId === a.id) setPanelOpen(false)
+    },
+    [confirm, run, selectedId],
+  )
+
+  const overlayOpen = !!(dialog || dispatchFor || newOpen || searchOpen)
   const keyState = useRef({ view, snapshot, sort, selectedId, panelOpen, overlayOpen, act })
   keyState.current = { view, snapshot, sort, selectedId, panelOpen, overlayOpen, act }
 
@@ -331,8 +343,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return void (can('start') || can('resume'))
         case 'pause':
           return void can('pause')
-        case 'snooze':
-          return void can('snooze')
         case 'dismiss':
           return void can('dismiss')
         case 'done':
@@ -369,12 +379,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       closePanel: () => setPanelOpen(false),
       act,
       move,
+      remove,
       reopenFor,
       setReopenFor,
       dispatchFor,
       setDispatchFor,
-      snoozeFor,
-      setSnoozeFor,
       newOpen,
       setNewOpen,
       searchOpen,
@@ -387,7 +396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       run,
     }),
-    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, unreadReports, checks, reloadChecks, selectedId, panelOpen, open, act, move, reopenFor, dispatchFor, snoozeFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
+    [view, go, activityCard, snapshot, filter, sort, settings, updateSettings, account, reloadAccount, connections, unreadReports, checks, reloadChecks, selectedId, panelOpen, open, act, move, remove, reopenFor, dispatchFor, newOpen, searchOpen, showWelcome, ask, confirm, promptText, toast, run],
   )
 
   return (

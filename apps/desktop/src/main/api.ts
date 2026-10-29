@@ -86,7 +86,7 @@ export function createApi(deps: ApiDeps): GantryApi {
       stop: (id) => runner.stop(id),
       answer: (id, questionId, text) => runner.answer(id, questionId, text),
       dismiss: (id) => board.dismissCard(id, USER),
-      snooze: async (id, until) => board.snooze(id, until),
+      delete: (id) => runner.delete(id),
       done: (id, cleanup) => runner.done(id, cleanup),
       reopen: (id, feedback) => runner.reopen(id, feedback),
       openInTerminal: (id) => runner.openInTerminal(id),

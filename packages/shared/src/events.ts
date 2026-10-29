@@ -12,6 +12,7 @@ export const EVENT_TYPES = [
   'done',
   'reopened',
   'dismissed',
+  'deleted',
   'snoozed',
   'unsnoozed',
   'moved',

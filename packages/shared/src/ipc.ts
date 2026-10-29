@@ -28,7 +28,6 @@ export interface BoardFilter {
   sources?: string[]
   providers?: string[]
   tags?: string[]
-  showSnoozed?: boolean
   showDismissed?: boolean
   showArchived?: boolean
   today?: boolean
@@ -123,7 +122,7 @@ export interface GantryApi {
     stop(id: string): Promise<void>
     answer(id: string, questionId: string, text: string): Promise<void>
     dismiss(id: string): Promise<void>
-    snooze(id: string, until: string): Promise<void>
+    delete(id: string): Promise<void>
     done(id: string, cleanup?: 'delete' | 'keep'): Promise<void>
     reopen(id: string, feedback?: string): Promise<void>
     openInTerminal(id: string): Promise<void>

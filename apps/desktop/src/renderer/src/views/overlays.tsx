@@ -3,7 +3,6 @@ import { Plus, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { SNOOZE_PRESETS, snoozeUntil } from '../lib/snooze'
 import { Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
 import { stateLabel } from './details'
 
@@ -45,7 +44,7 @@ export function SearchPalette() {
         </div>
         <div className="palette-list" role="listbox">
           {query && !results.length && <div className="palette-item muted">No matches</div>}
-          {!query && <div className="palette-item muted">Searches every card, including Done, Dismissed, and Snoozed.</div>}
+          {!query && <div className="palette-item muted">Searches every card, including Done and Dismissed.</div>}
           {results.map((a, i) => (
             <div key={a.id} role="option" aria-selected={i === active} className={`palette-item ${i === active ? 'active' : ''}`} onMouseEnter={() => setActive(i)} onClick={() => choose(a)}>
               <SourceIcon kind={a.source.kind} />
@@ -134,37 +133,6 @@ export function NewActionableModal() {
         </button>
       </div>
     </Modal>
-  )
-}
-
-export function SnoozeMenu() {
-  const app = useApp()
-  const { card, anchor } = app.snoozeFor!
-  const [custom, setCustom] = useState('')
-  const close = () => app.setSnoozeFor(undefined)
-  const snooze = async (until: Date) => {
-    close()
-    await app.run(api.board.snooze(card.id, until.toISOString()))
-  }
-  return (
-    <Popover anchor={anchor} onClose={close}>
-      <div className="menu-label">Snooze {card.displayId} until</div>
-      {SNOOZE_PRESETS.map((p) => (
-        <button key={p.id} className="menu-item" onClick={() => snooze(snoozeUntil(p.id))}>
-          {p.label}
-          <span className="faint small" style={{ marginLeft: 'auto' }}>
-            {snoozeUntil(p.id).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
-          </span>
-        </button>
-      ))}
-      <div className="menu-sep" />
-      <div className="row" style={{ padding: '4px 6px' }}>
-        <input className="field grow" type="datetime-local" aria-label="Custom snooze time" value={custom} onChange={(e) => setCustom(e.target.value)} />
-        <button className="btn sm" disabled={!custom || new Date(custom) <= new Date()} onClick={() => snooze(new Date(custom))}>
-          Snooze
-        </button>
-      </div>
-    </Popover>
   )
 }
 

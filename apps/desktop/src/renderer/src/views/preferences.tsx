@@ -4,7 +4,6 @@ import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'reac
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { SHORTCUT_LIST } from '../lib/shortcuts'
-import { SNOOZE_PRESETS } from '../lib/snooze'
 import { Github, Modal, Popover, PRESET_LABEL, Select, Tag, Toggle, usePopover } from '../ui'
 import { useBrowserAuth } from './connections'
 
@@ -68,14 +67,6 @@ export function PreferencesView() {
               </Row>
               <Row title="Confirm before stopping an agent" hint="Stopping ends execution; pausing preserves the current session.">
                 <Toggle label="Confirm before stopping" checked={s.confirmBeforeStop} onChange={(v) => set({ confirmBeforeStop: v })} />
-              </Row>
-              <Row title="Snooze presets" hint="Available from every card’s Snooze menu, plus a custom date and time.">
-                <span className="row wrap" style={{ gap: 4 }}>
-                  {SNOOZE_PRESETS.map((p) => (
-                    <Tag key={p.id}>{p.label}</Tag>
-                  ))}
-                  <Tag>Custom</Tag>
-                </span>
               </Row>
             </Group>
 

@@ -122,6 +122,18 @@ describe('worktrees', () => {
     expect(s.provider.requests[0]!.model).toBe('sonnet')
   })
 
+  it('deletes a running card with its workspace', async () => {
+    const s = setup()
+    const id = await started(s)
+    const path = s.board.must(id).dispatch!.worktreePath
+    await s.runner.delete(id)
+    expect(s.execCalls.at(-1)).toEqual(['git', '-C', '/code/api', 'worktree', 'remove', '--force', path])
+    expect(s.board.get(id)).toBeUndefined()
+    expect(s.board.snapshot().actionables).toHaveLength(0)
+    expect(s.board.recordedWorktrees(id)).toHaveLength(0)
+    expect(s.eventTypes(id).at(-1)).toBe('deleted')
+  })
+
   it('moving a Review card to Done cleans up like the Done button', async () => {
     const s = setup()
     const id = await started(s)

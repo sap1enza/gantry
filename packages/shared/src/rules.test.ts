@@ -7,14 +7,14 @@ const card = (over: Partial<Actionable>): Actionable =>
 
 describe('actionsFor', () => {
   it('matches the PRD button table', () => {
-    expect(actionsFor(card({ column: 'todo' }))).toEqual(['start', 'snooze', 'dismiss'])
+    expect(actionsFor(card({ column: 'todo' }))).toEqual(['start', 'dismiss'])
     expect(actionsFor(card({ column: 'in_progress', agentState: 'running' }))).toEqual(['pause', 'stop', 'dismiss'])
     expect(actionsFor(card({ column: 'in_progress', agentState: 'awaiting_input' }))).toEqual(['pause', 'stop', 'dismiss'])
-    expect(actionsFor(card({ column: 'in_progress', agentState: 'paused' }))).toEqual(['resume', 'stop', 'snooze', 'dismiss'])
-    expect(actionsFor(card({ column: 'in_progress', agentState: 'queued' }))).toEqual(['stop', 'snooze', 'dismiss'])
+    expect(actionsFor(card({ column: 'in_progress', agentState: 'paused' }))).toEqual(['resume', 'stop', 'dismiss'])
+    expect(actionsFor(card({ column: 'in_progress', agentState: 'queued' }))).toEqual(['stop', 'dismiss'])
     expect(actionsFor(card({ column: 'review' }))).toEqual(['done', 'reopen', 'dismiss'])
     expect(actionsFor(card({ column: 'done' }))).toEqual(['reopen_todo', 'dismiss'])
-    expect(actionsFor(card({ column: 'waiting' }))).toEqual(['start', 'snooze', 'dismiss'])
+    expect(actionsFor(card({ column: 'waiting' }))).toEqual(['start', 'dismiss'])
     expect(actionsFor(card({ dismissedAt: 'x' }))).toEqual([])
   })
 })

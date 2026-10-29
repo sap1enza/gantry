@@ -19,6 +19,7 @@ const TYPE_LABEL: Record<EventType, string> = {
   done: 'Done',
   reopened: 'Reopened',
   dismissed: 'Dismissed',
+  deleted: 'Deleted',
   snoozed: 'Snoozed',
   unsnoozed: 'Unsnoozed',
   moved: 'Moved',
@@ -26,6 +27,29 @@ const TYPE_LABEL: Record<EventType, string> = {
   resolved_externally: 'Resolved externally',
   connection: 'Connection',
 }
+const OUTCOME_LABEL: Record<string, string> = {
+  created: 'created card',
+  updated: 'updated card',
+  'ignored:trigger-off': 'ignored, trigger off',
+  'ignored:filtered': 'ignored, filtered',
+  'ignored:duplicate': 'no change',
+  'ignored:error': 'failed',
+}
+
+export function CardEvent({ e, time }: { e: ActivityEvent; time: (iso: string) => string }) {
+  const actor = e.actor.kind === 'user' ? 'You' : e.actor.name
+  return (
+    <li>
+      <span className="row" style={{ gap: 6 }}>
+        <Tag tone={TYPE_TONE[e.type]}>{TYPE_LABEL[e.type]}</Tag>
+        <span className="muted small">{[actor, e.outcome && OUTCOME_LABEL[e.outcome]].filter(Boolean).join(' · ')}</span>
+      </span>
+      {e.detail && <div className="muted selectable clamp-3">{e.detail}</div>}
+      <span className="mono">{time(e.createdAt)}</span>
+    </li>
+  )
+}
+
 const TYPE_TONE: Partial<Record<EventType, string>> = {
   dispatched: 'blue',
   completed: 'green',

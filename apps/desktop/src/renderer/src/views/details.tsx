@@ -2,13 +2,13 @@ import { actionsFor, isAgentActive, isCustomColumn, PRIORITIES, TAGS, type Actio
 import { ChevronRight, ExternalLink, FileText, GitPullRequest, List, PanelRightClose, Pencil, Plus, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
+import { CardEvent } from './activity'
 import { api } from '../bridge'
 import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL, when } from '../ui'
 
 export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
   if (a.archivedAt) return 'Archived'
-  if (a.snoozedUntil && new Date(a.snoozedUntil) > new Date()) return 'Snoozed'
   if (a.column === 'in_progress' && a.agentState) return a.agentState === 'running' ? 'Agent running' : AGENT_STATE_LABEL[a.agentState]
   if (a.column === 'review') return 'Ready for review'
   return columns.find((c) => c.id === a.column)?.name ?? (isCustomColumn(a.column) ? 'Custom column' : a.column)
@@ -116,11 +116,7 @@ export function DetailsPanel({ id }: { id: string }) {
           ) : (
             <ul className="timeline" style={{ margin: 0 }}>
               {log.map((e) => (
-                <li key={e.id}>
-                  {e.title}
-                  {e.detail && <div className="muted selectable">{e.detail}</div>}
-                  <span className="mono">{clock(e.createdAt)}</span>
-                </li>
+                <CardEvent key={e.id} e={e} time={when} />
               ))}
               {!log.length && <li className="muted">No activity yet</li>}
             </ul>
@@ -176,7 +172,6 @@ export function DetailsPanel({ id }: { id: string }) {
                 <ActionButton key={a} action={a} large onClick={(el) => app.act(a, card, el)} />
               ))}
             </div>
-            {isAgentActive(card) && <span className="small muted">Pause or stop the agent before snoozing.</span>}
           </div>
         )}
 
@@ -297,10 +292,7 @@ export function DetailsPanel({ id }: { id: string }) {
           </summary>
           <ul className="timeline" style={{ margin: 0 }}>
             {events.map((e) => (
-              <li key={e.id}>
-                {e.title}
-                <span className="mono">{clockSeconds(e.createdAt)}</span>
-              </li>
+              <CardEvent key={e.id} e={e} time={when} />
             ))}
             {!events.length && <li className="muted">No activity yet</li>}
           </ul>

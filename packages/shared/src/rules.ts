@@ -5,7 +5,6 @@ export type CardAction =
   | 'pause'
   | 'resume'
   | 'stop'
-  | 'snooze'
   | 'dismiss'
   | 'done'
   | 'reopen'
@@ -25,17 +24,17 @@ export function actionsFor(a: Actionable): CardAction[] {
   if (a.dismissedAt || a.archivedAt) return []
   switch (a.column) {
     case 'todo':
-      return ['start', 'snooze', 'dismiss']
+      return ['start', 'dismiss']
     case 'in_progress':
       if (isAgentActive(a)) return ['pause', 'stop', 'dismiss']
-      if (a.agentState === 'paused') return ['resume', 'stop', 'snooze', 'dismiss']
-      return ['stop', 'snooze', 'dismiss']
+      if (a.agentState === 'paused') return ['resume', 'stop', 'dismiss']
+      return ['stop', 'dismiss']
     case 'review':
       return a.dispatch?.sessionId ? ['done', 'reopen', 'open_terminal', 'dismiss'] : ['done', 'reopen', 'dismiss']
     case 'done':
       return ['reopen_todo', 'dismiss']
     default:
-      return ['start', 'snooze', 'dismiss']
+      return ['start', 'dismiss']
   }
 }
 

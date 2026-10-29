@@ -204,7 +204,6 @@ export class Board implements IngestSink {
 
   private persist(a: Actionable, event?: EventInput) {
     a.updatedAt = this.iso()
-    if (event?.actor.kind === 'user') a.tags = without(a.tags, TAGS.snoozed)
     this.write(a)
   }
 
@@ -284,7 +283,6 @@ export class Board implements IngestSink {
   private markDoneFields(a: Actionable) {
     a.column = 'done'
     a.doneAt = this.iso()
-    delete a.snoozedUntil
     if (!this.deps.settings().keepCompleted) a.archivedAt = a.doneAt
   }
 
@@ -318,7 +316,6 @@ export class Board implements IngestSink {
     }
 
     const newTrigger = !existing.triggers.includes(signal.trigger)
-    const unsnoozesQueue = existing.column === 'in_progress' && !!existing.snoozedUntil
     if (existing.dismissedAt && !newTrigger) {
       this.log(received('ignored:duplicate'), existing)
       return { outcome: 'ignored:duplicate', actionableId: existing.id }
@@ -336,15 +333,13 @@ export class Board implements IngestSink {
         a.triggers = unique([...a.triggers, signal.trigger])
         a.metadata = { ...a.metadata, ...externalMetadata(signal.metadata) }
         if (signal.id && signal.id !== a.id) a.metadata.aliasIds = unique([...((a.metadata.aliasIds as string[] | undefined) ?? []), signal.id]).slice(-MAX_ALIASES)
-        if (a.dismissedAt || a.column === 'done' || (a.snoozedUntil && a.column !== 'in_progress')) {
+        if (a.dismissedAt || a.column === 'done') {
           this.reopenFields(a)
           delete a.dismissedAt
         }
-        delete a.snoozedUntil
       },
       received('updated'),
     )
-    if (unsnoozesQueue) this.agents?.drain()
     return { outcome: 'updated', actionableId: existing.id }
   }
 
@@ -426,10 +421,7 @@ export class Board implements IngestSink {
     if (hasLiveAgent(card)) await this.agents?.stop(id)
     this.update(
       id,
-      (a) => {
-        a.dismissedAt = this.iso()
-        delete a.snoozedUntil
-      },
+      (a) => (a.dismissedAt = this.iso()),
       { type: 'dismissed', actor },
     )
   }
@@ -504,7 +496,6 @@ export class Board implements IngestSink {
     if ((from === 'done') !== (column === 'done')) throw new Error(`${a.displayId} enters and leaves Done through Done and Reopen`)
     const columns = this.columns()
     a.column = column
-    a.tags = without(a.tags, TAGS.snoozed)
     const siblings = this.where('board_column = ? AND id != ? AND archived_at IS NULL AND dismissed_at IS NULL', column, id).sort((x, y) => x.position - y.position)
     insertAt(siblings, position, a)
     const name = (cid: ColumnId) => columns.find((c) => c.id === cid)?.name ?? cid
@@ -516,13 +507,6 @@ export class Board implements IngestSink {
       })
       this.save(a, from === column ? undefined : { type: 'moved', detail: `${name(from)} → ${name(column)}`, actor: USER })
     })
-  }
-
-  snooze(id: string, until: string) {
-    const at = Date.parse(until)
-    assertAction(this.must(id), 'snooze')
-    if (!(at > this.now().getTime())) throw new Error('Snooze time must be in the future')
-    this.update(id, (a) => (a.snoozedUntil = new Date(at).toISOString()), { type: 'snoozed', detail: `Until ${new Date(at).toISOString()}`, actor: USER })
   }
 
   reopenToTodo(id: string, detail?: string) {
@@ -540,26 +524,11 @@ export class Board implements IngestSink {
     const s = this.deps.settings()
     const iso = new Date(now).toISOString()
     const archiveBefore = new Date(now - s.archiveDoneAfterDays * DAY_MS).toISOString()
-    const due = this.where(
-      "snoozed_until <= ? OR (board_column = 'done' AND archived_at IS NULL AND json_extract(data, '$.doneAt') <= ?)",
-      iso,
-      archiveBefore,
-    )
-    let unsnoozedInProgress = false
-    this.updateEach(due, (c) => {
-      if (!c.snoozedUntil || c.snoozedUntil > iso) return void (c.archivedAt = iso)
-      delete c.snoozedUntil
-      unsnoozedInProgress ||= c.column === 'in_progress'
-      if (c.column !== 'in_progress' && c.column !== 'done') {
-        c.tags = unique([...c.tags, TAGS.snoozed])
-        this.reopenFields(c)
-      }
-      return { type: 'unsnoozed', actor: GANTRY }
-    })
+    const due = this.where("board_column = 'done' AND archived_at IS NULL AND json_extract(data, '$.doneAt') <= ?", archiveBefore)
+    this.updateEach(due, (c) => void (c.archivedAt = iso))
     const cutoff = new Date(now - s.activityRetentionDays * DAY_MS).toISOString()
     this.sql('DELETE FROM events WHERE created_at < ?').run(cutoff)
     this.sql('DELETE FROM transcript WHERE at < ?').run(cutoff)
-    if (unsnoozedInProgress) this.agents?.drain()
   }
 
   private touchedSince(since: string) {
@@ -573,10 +542,9 @@ export class Board implements IngestSink {
     const today = this.startOfToday()
     const touchedToday = filter.today ? this.touchedSince(today) : undefined
     const actionables = this.where(
-      '(? OR archived_at IS NULL) AND (? OR dismissed_at IS NULL) AND (? OR snoozed_until IS NULL)',
+      '(? OR archived_at IS NULL) AND (? OR dismissed_at IS NULL)',
       Number(!!filter.showArchived),
       Number(!!filter.showDismissed),
-      Number(!!filter.showSnoozed),
     )
       .filter(
         (a) =>
@@ -701,9 +669,19 @@ export class Board implements IngestSink {
     ).n
   }
 
-  recordedWorktrees() {
+  recordedWorktrees(actionableId?: string) {
     return this.db
-      .prepare("SELECT DISTINCT json_extract(data, '$.repositoryPath') AS repositoryPath, json_extract(data, '$.worktreePath') AS worktreePath FROM dispatches")
-      .all() as { repositoryPath: string; worktreePath: string }[]
+      .prepare(`SELECT DISTINCT json_extract(data, '$.repositoryPath') AS repositoryPath, json_extract(data, '$.worktreePath') AS worktreePath FROM dispatches${actionableId ? ' WHERE actionable_id = ?' : ''}`)
+      .all(...(actionableId ? [actionableId] : [])) as { repositoryPath: string; worktreePath: string }[]
+  }
+
+  remove(id: string, detail?: string) {
+    const card = this.must(id)
+    this.transaction(() => {
+      for (const table of ['transcript', 'dispatches']) this.sql(`DELETE FROM ${table} WHERE actionable_id = ?`).run(id)
+      this.sql('DELETE FROM actionables WHERE id = ?').run(id)
+    })
+    this.log({ type: 'deleted', detail, actor: USER }, card)
+    this.deps.push({ type: 'board.changed' })
   }
 }

@@ -1,5 +1,5 @@
 import { actionsFor, canMove, isCustomColumn, SOURCE_KINDS, type Actionable, type BoardSnapshot, type CardFieldVisibility, type Column, type ColumnId } from '@gantry/shared'
-import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GitBranch, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal } from 'lucide-react'
+import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, ExternalLink, GitBranch, GripVertical, Lock, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, Trash2 } from 'lucide-react'
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
@@ -115,7 +115,7 @@ export function TriageView() {
 }
 
 function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardFieldVisibility }) {
-  const { sort, selectedId, act, move, open, select, run } = useApp()
+  const { sort, selectedId, act, move, remove, open, select, run } = useApp()
   const [drag, setDrag] = useState<Drag>()
   const [dropAt, setDropAt] = useState<DropAt>()
   const byColumn = useMemo(() => new Map(s.columns.map((c) => [c.id, columnCards(s, c.id, sort)])), [s, sort])
@@ -147,6 +147,7 @@ function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardF
     () => ({
       act,
       move,
+      remove,
       open,
       select,
       run,
@@ -161,7 +162,7 @@ function Board({ snapshot: s, fields }: { snapshot: BoardSnapshot; fields: CardF
       },
       drop: (e, card) => drop(e, card.column, card.id),
     }),
-    [act, move, open, select, run, endDrag, drop],
+    [act, move, remove, open, select, run, endDrag, drop],
   )
 
   return (
@@ -228,7 +229,7 @@ function Toolbar() {
       <button className="btn sm" onClick={(e) => srcPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
         {sources.length === 0 ? 'All sources' : sources.length === 1 ? SOURCE_LABELS[sources[0] as keyof typeof SOURCE_LABELS] : `${sources.length} sources`}
-        {(f.showSnoozed || f.showDismissed) && <Tag tone="blue">+{[f.showSnoozed && 'snoozed', f.showDismissed && 'dismissed'].filter(Boolean).join(', ')}</Tag>}
+        {f.showDismissed && <Tag tone="blue">+dismissed</Tag>}
       </button>
       {srcPop.anchor && (
         <Popover anchor={srcPop.anchor} onClose={srcPop.close}>
@@ -242,9 +243,6 @@ function Toolbar() {
             </label>
           ))}
           <div className="menu-sep" />
-          <label className="menu-item check">
-            <input type="checkbox" checked={!!f.showSnoozed} onChange={() => app.setFilter({ ...f, showSnoozed: !f.showSnoozed })} /> Show snoozed
-          </label>
           <label className="menu-item check">
             <input type="checkbox" checked={!!f.showDismissed} onChange={() => app.setFilter({ ...f, showDismissed: !f.showDismissed })} /> Show dismissed
           </label>
@@ -365,13 +363,13 @@ function statusTags(card: Actionable, now: number): string[] {
   else if (state === 'awaiting_input') out.push('Awaiting input')
   else if ((card.column === 'done' || card.column === 'review') && state === 'completed') out.push(`Completed · ${when(card.doneAt ?? card.updatedAt)}`)
   if (card.dismissedAt) out.push('Dismissed')
-  if (card.snoozedUntil && new Date(card.snoozedUntil).getTime() > now) out.push(`Snoozed until ${clock(card.snoozedUntil)}`)
   return [...out, ...card.tags]
 }
 
 interface CardHandlers {
   act: AppState['act']
   move: AppState['move']
+  remove: AppState['remove']
   open: AppState['open']
   select: AppState['select']
   run: AppState['run']
@@ -473,6 +471,10 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
               {c.name}
             </button>
           ))}
+          <div className="menu-sep" />
+          <button className="menu-item danger" onClick={() => (menu.close(), void on.remove(card))}>
+            <Trash2 size={12} /> Delete
+          </button>
         </Popover>
       )}
     </article>

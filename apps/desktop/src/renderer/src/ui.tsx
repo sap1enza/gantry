@@ -1,7 +1,6 @@
 import { PROVIDER_SOURCE, unique, type Actionable, type CardAction, type OAuthProvider, type Priority, type SourceKind } from '@gantry/shared'
 import {
   Check,
-  Clock,
   Pause,
   PencilLine,
   Play,
@@ -53,7 +52,6 @@ export const ACTION_META: Record<CardAction, { label: string; icon: (p: LucidePr
   pause: { label: 'Pause', icon: Pause },
   resume: { label: 'Resume', icon: Play },
   stop: { label: 'Stop', icon: Square },
-  snooze: { label: 'Snooze', icon: Clock },
   dismiss: { label: 'Dismiss', icon: X },
   done: { label: 'Done', icon: Check },
   reopen: { label: 'Reopen', icon: RotateCcw },
@@ -79,7 +77,7 @@ export function ActionButton({ action, onClick, large }: { action: CardAction; o
 
 const TAG_TONE: [RegExp, string][] = [
   [/fail|ci failed|changes requested|disconnected/i, 'red'],
-  [/needs|ai detected|conflict|stopped|queued|paused|awaiting|reconnect|snoozed/i, 'amber'],
+  [/needs|ai detected|conflict|stopped|queued|paused|awaiting|reconnect/i, 'amber'],
   [/completed|resolved|connected|enabled/i, 'green'],
   [/running/i, 'blue'],
 ]

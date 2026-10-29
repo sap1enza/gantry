@@ -10,7 +10,6 @@ export type Shortcut =
   | 'close'
   | 'start'
   | 'pause'
-  | 'snooze'
   | 'dismiss'
   | 'done'
 
@@ -23,7 +22,6 @@ export const SHORTCUT_LIST: [string, string][] = [
   ['Esc', 'Close panel'],
   ['S', 'Start or resume'],
   ['P', 'Pause'],
-  ['Z', 'Snooze'],
   ['D', 'Dismiss'],
   ['⌘⏎', 'Done (in Review)'],
 ]
@@ -44,7 +42,6 @@ const PLAIN: Record<string, Shortcut> = {
   Escape: 'close',
   s: 'start',
   p: 'pause',
-  z: 'snooze',
   d: 'dismiss',
 }
 

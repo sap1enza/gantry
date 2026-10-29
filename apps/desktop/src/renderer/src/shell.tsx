@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useApp, type View } from './app'
 import { ActivityView } from './views/activity'
 import { ConnectionsView } from './views/connections'
-import { DispatchSheet, NewActionableModal, SearchPalette, SnoozeMenu } from './views/overlays'
+import { DispatchSheet, NewActionableModal, SearchPalette } from './views/overlays'
 import { Onboarding } from './views/onboarding'
 import { PreferencesView } from './views/preferences'
 import { ReportsView } from './views/reports'
@@ -104,7 +104,6 @@ export function Shell() {
 
       {app.searchOpen && <SearchPalette />}
       {app.newOpen && <NewActionableModal />}
-      {app.snoozeFor && <SnoozeMenu />}
       {app.dispatchFor && <DispatchSheet />}
     </div>
   )
