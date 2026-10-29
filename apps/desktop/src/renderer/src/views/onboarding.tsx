@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, ArrowUpRight, Blocks, Check, CircleCheck, Circle
 import { useState, type ReactNode } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon, Tag } from '../ui'
+import { Button, Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon, Tag } from '../ui'
 import { useBrowserAuth } from './connections'
 import { AgentSettings, WorkspaceCleanupRow } from './preferences'
 
@@ -53,18 +53,18 @@ export function Onboarding() {
             {acc?.signedIn ? (
               <Tag tone="green">Signed in{acc.githubLogin ? ` as ${acc.githubLogin}` : acc.email ? ` as ${acc.email}` : ''}</Tag>
             ) : (
-              <button className="btn" disabled={!name.trim()} onClick={() => signIn('github')}>
+              <Button className="btn" disabled={!name.trim()} onClick={() => signIn('github')}>
                 <Github size={13} /> GitHub
-              </button>
+              </Button>
             )}
           </div>
           {!acc?.signedIn && (
             <div className="pref-row">
               <b className="grow">Or sign in with email</b>
               <input className="field" type="email" style={{ width: 200 }} placeholder="you@company.com" aria-label="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-              <button className="btn" disabled={!name.trim() || !/^\S+@\S+\.\S+$/.test(email)} onClick={() => signIn('email')}>
+              <Button className="btn" disabled={!name.trim() || !/^\S+@\S+\.\S+$/.test(email)} onClick={() => signIn('email')}>
                 <Mail size={13} /> Send link
-              </button>
+              </Button>
             </div>
           )}
           {auth.banner}
@@ -86,9 +86,9 @@ export function Onboarding() {
               {statusOf(provider) === 'connected' ? (
                 <Tag tone="green">Connected</Tag>
               ) : (
-                <button className="btn" onClick={() => auth.start(api.connections.connect(provider))}>
+                <Button className="btn" onClick={() => auth.start(api.connections.connect(provider))}>
                   <ArrowUpRight size={12} /> {statusOf(provider) === 'reconnect_required' ? 'Reconnect' : 'Connect'}
-                </button>
+                </Button>
               )}
             </div>
           ))}
@@ -145,19 +145,19 @@ export function Onboarding() {
         {page.body}
         <div className="row">
           {step > 0 && (
-            <button className="btn" onClick={() => setStep(step - 1)}>
+            <Button className="btn" onClick={() => setStep(step - 1)}>
               <ArrowLeft size={13} /> Back
-            </button>
+            </Button>
           )}
           <div className="grow" />
           {step > 0 && step < STEPS.length - 1 && (
-            <button className="btn ghost" onClick={() => setStep(step + 1)}>
+            <Button className="btn ghost" onClick={() => setStep(step + 1)}>
               Skip
-            </button>
+            </Button>
           )}
-          <button className="btn primary" disabled={!name.trim()} onClick={next}>
+          <Button className="btn primary" disabled={!name.trim()} onClick={next}>
             {step === STEPS.length - 1 ? 'Open Gantry' : 'Continue'} <ArrowRight size={13} />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

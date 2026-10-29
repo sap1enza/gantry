@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'reac
 import { useApp } from '../app'
 import { api } from '../bridge'
 import { SHORTCUT_LIST } from '../lib/shortcuts'
-import { Github, Modal, Popover, PRESET_LABEL, Select, Tag, Toggle, usePopover } from '../ui'
+import { Button, Github, Modal, Popover, PRESET_LABEL, Select, Tag, Toggle, usePopover } from '../ui'
 import { useBrowserAuth } from './connections'
 
 export function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
@@ -88,9 +88,9 @@ export function PreferencesView() {
 
             <Group title="Inputs & integrations">
               <Row title="Manage connections and triggers" hint="GitHub access and triggers, and custom API sources.">
-                <button className="btn" onClick={() => app.go('connections')}>
+                <Button className="btn" onClick={() => app.go('connections')}>
                   <ArrowUpRight size={13} /> Open Connections
-                </button>
+                </Button>
               </Row>
             </Group>
 
@@ -105,9 +105,9 @@ export function PreferencesView() {
                     </>
                   }
                 >
-                  <button className="btn danger" onClick={() => setDeleting(true)}>
+                  <Button className="btn danger" onClick={() => setDeleting(true)}>
                     <Trash2 size={13} /> Delete all data…
-                  </button>
+                  </Button>
                 </Row>
             </Group>
           </div>
@@ -152,7 +152,7 @@ export function PreferencesView() {
                 </Row>
                 <Row title={acc?.signedIn ? 'Signed in' : 'Not signed in'} hint={acc?.signedIn ? (acc.githubLogin ? `GitHub · ${acc.githubLogin}` : acc.email) : 'Local account. Sign in to enable multi-device later.'}>
                   {acc?.signedIn ? (
-                    <button
+                    <Button
                       className="btn"
                       onClick={async () => {
                         await app.run(api.account.signOut())
@@ -160,26 +160,26 @@ export function PreferencesView() {
                       }}
                     >
                       Sign out
-                    </button>
+                    </Button>
                   ) : (
-                    <button
+                    <Button
                       className="btn"
                       onClick={() => auth.start(api.account.signIn('github'))}
                     >
                       <Github size={13} /> GitHub
-                    </button>
+                    </Button>
                   )}
                 </Row>
                 {!acc?.signedIn && (
                   <Row title="Sign in with email" hint="We’ll send a magic link.">
                     <input className="field" type="email" style={{ width: 170 }} placeholder="you@company.com" aria-label="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-                    <button
+                    <Button
                       className="btn"
                       disabled={!/^\S+@\S+\.\S+$/.test(email)}
                       onClick={async () => (await auth.start(api.account.signIn('email', email))) && app.toast(`Magic link sent to ${email}`)}
                     >
                       <Mail size={13} /> Send
-                    </button>
+                    </Button>
                   </Row>
                 )}
                 {auth.banner}
@@ -221,10 +221,10 @@ function DeleteAllDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={onClose}>
+          <Button className="btn" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             className="btn danger solid"
             disabled={typed !== 'DELETE' || busy}
             onClick={async () => {
@@ -236,7 +236,7 @@ function DeleteAllDialog({ onClose }: { onClose: () => void }) {
             }}
           >
             Delete everything
-          </button>
+          </Button>
         </>
       }
     >
@@ -263,17 +263,17 @@ function BranchSelect({ repo, onChange }: { repo: Repository; onChange: () => vo
   }
   return (
     <>
-      <button className="select branch-select" aria-label={`Base branch for ${repo.remote}`} onClick={(e) => pop.toggle(e.currentTarget)}>
+      <Button className="select branch-select" aria-label={`Base branch for ${repo.remote}`} onClick={(e) => pop.toggle(e.currentTarget)}>
         {repo.defaultBranch}
-      </button>
+      </Button>
       {pop.anchor && (
         <Popover anchor={pop.anchor} onClose={pop.close} align="right">
           <input className="field" autoFocus placeholder="Search branches" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && matches[0] && pick(matches[0])} />
           <div className="branch-list">
             {matches.map((b) => (
-              <button key={b} className={`menu-item ${b === repo.defaultBranch ? 'active' : ''}`} onClick={() => pick(b)}>
+              <Button key={b} className={`menu-item ${b === repo.defaultBranch ? 'active' : ''}`} onClick={() => pick(b)}>
                 {b}
-              </button>
+              </Button>
             ))}
             {!matches.length && <div className="menu-label">No matching branches</div>}
           </div>
@@ -304,7 +304,7 @@ export function AgentSettings() {
       </Row>
       <Row title="Workspace location" hint="Each actionable gets its own repository worktree.">
         <span className="mono muted">{s.workspaceLocation}</span>
-        <button
+        <Button
           className="btn"
           onClick={async () => {
             const loc = await app.run(api.settings.chooseWorkspaceLocation())
@@ -312,7 +312,7 @@ export function AgentSettings() {
           }}
         >
           Choose…
-        </button>
+        </Button>
       </Row>
       <div className="pref-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
         <div className="row">
@@ -320,7 +320,7 @@ export function AgentSettings() {
             <b>Registered repositories</b>
             <p>Local clones agents work in. New worktrees branch from the selected base branch, fetched from origin first. The setup command runs inside each new worktree; a non-zero exit fails the dispatch.</p>
           </div>
-          <button
+          <Button
             className="btn"
             onClick={async () => {
               await app.run(api.repos.add())
@@ -328,7 +328,7 @@ export function AgentSettings() {
             }}
           >
             <Plus size={13} /> Add repository
-          </button>
+          </Button>
         </div>
         {repos.map((r) => (
           <div key={r.id} className="row" style={{ gap: 10 }}>
@@ -344,7 +344,7 @@ export function AgentSettings() {
               aria-label={`Setup command for ${r.remote}`}
               onBlur={(e) => e.target.value !== (r.setupCommand ?? '') && app.run(api.repos.update(r.id, { setupCommand: e.target.value }))}
             />
-            <button
+            <Button
               className="icon-btn"
               aria-label={`Remove ${r.remote}`}
               onClick={async () => {
@@ -354,7 +354,7 @@ export function AgentSettings() {
               }}
             >
               <Trash2 size={13} />
-            </button>
+            </Button>
           </div>
         ))}
         {!repos.length && <span className="small faint">No repositories registered yet.</span>}

@@ -12,7 +12,7 @@ import {
   X,
   type LucideProps,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { parseMarkdown, type Inline } from './lib/markdown'
 
 export function Github(props: LucideProps) {
@@ -60,27 +60,41 @@ export const ACTION_META: Record<CardAction, { label: string; icon: (p: LucidePr
   reopen_todo: { label: 'Reopen to To-do', icon: RotateCcw },
 }
 
-export function ActionButton({ action, onClick, large }: { action: CardAction; onClick: (anchor: HTMLElement) => unknown; large?: boolean }) {
-  const { label, icon: Icon } = ACTION_META[action]
+export function Button({ onClick, disabled, className, children, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> & { onClick?: (e: ReactMouseEvent<HTMLButtonElement>) => unknown }) {
   const [busy, setBusy] = useState(false)
   return (
     <button
-      className={`btn ${large ? '' : 'sm'} ${action === 'start' || action === 'done' ? 'primary' : ''}`}
-      disabled={busy}
-      aria-busy={busy}
-      onClick={async (e) => {
-        e.stopPropagation()
+      {...rest}
+      className={busy ? `${className ?? ''} busy` : className}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      onClick={(e) => {
+        const result = onClick?.(e)
+        if (!(result instanceof Promise)) return
         setBusy(true)
-        try {
-          await onClick(e.currentTarget)
-        } finally {
-          setBusy(false)
-        }
+        const done = () => setBusy(false)
+        result.then(done, done)
       }}
     >
-      {busy ? <LoaderCircle size={12} className="spin" /> : <Icon size={12} />}
-      {label}
+      {busy && <LoaderCircle size={12} className="spin" />}
+      {children}
     </button>
+  )
+}
+
+export function ActionButton({ action, onClick, large }: { action: CardAction; onClick: (anchor: HTMLElement) => unknown; large?: boolean }) {
+  const { label, icon: Icon } = ACTION_META[action]
+  return (
+    <Button
+      className={`btn ${large ? '' : 'sm'} ${action === 'start' || action === 'done' ? 'primary' : ''}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        return onClick(e.currentTarget)
+      }}
+    >
+      <Icon size={12} />
+      {label}
+    </Button>
   )
 }
 

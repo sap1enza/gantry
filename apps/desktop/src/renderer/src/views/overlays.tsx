@@ -3,7 +3,7 @@ import { Plus, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
+import { Button, Modal, Popover, PRESET_HINT, PRESET_LABEL, PROVIDER_LABEL, Select, SourceIcon, Tag } from '../ui'
 import { stateLabel } from './details'
 
 export function SearchPalette() {
@@ -86,12 +86,12 @@ export function NewActionableModal() {
       onClose={close}
       footer={
         <>
-          <button className="btn" onClick={close}>
+          <Button className="btn" onClick={close}>
             Cancel
-          </button>
-          <button className="btn primary" disabled={!title.trim()} onClick={create}>
+          </Button>
+          <Button className="btn primary" disabled={!title.trim()} onClick={create}>
             Create actionable
-          </button>
+          </Button>
         </>
       }
     >
@@ -123,14 +123,14 @@ export function NewActionableModal() {
           <div key={i} className="row">
             <input className="field" style={{ width: 150 }} placeholder="Label" value={l.label} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
             <input className="field grow" placeholder="https://" value={l.url} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} />
-            <button className="icon-btn" aria-label="Remove link" onClick={() => setLinks(links.filter((_, j) => j !== i))}>
+            <Button className="icon-btn" aria-label="Remove link" onClick={() => setLinks(links.filter((_, j) => j !== i))}>
               <X size={13} />
-            </button>
+            </Button>
           </div>
         ))}
-        <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setLinks([...links, { label: '', url: '' }])}>
+        <Button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setLinks([...links, { label: '', url: '' }])}>
           <Plus size={12} /> Add link
-        </button>
+        </Button>
       </div>
     </Modal>
   )
@@ -156,12 +156,12 @@ export function DispatchSheet() {
       onClose={close}
       footer={
         <>
-          <button className="btn" onClick={close}>
+          <Button className="btn" onClick={close}>
             Cancel
-          </button>
-          <button className="btn primary" disabled={!repository || !instructions.trim()} onClick={start}>
+          </Button>
+          <Button className="btn primary" disabled={!repository || !instructions.trim()} onClick={start}>
             Start agent
-          </button>
+          </Button>
         </>
       }
     >

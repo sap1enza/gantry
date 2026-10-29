@@ -3,7 +3,7 @@ import { Activity, ArrowUpRight, Copy, ExternalLink, Info, KeyRound, RefreshCw, 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { ago, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
+import { Button, ago, Github, Modal, Popover, Select, Tag, toggle, Toggle, usePopover } from '../ui'
 
 const STATUS_LABEL = { connected: 'Connected', reconnect_required: 'Reconnect required', disconnected: 'Disconnected' } as const
 const SEVERITY_OPTIONS = SEVERITIES.map((v) => ({ value: v, label: `≥ ${v === 'medium' ? 'moderate' : v}` }))
@@ -46,12 +46,12 @@ function FinishInBrowser({ onClose }: { onClose(): void }) {
         Gantry continues automatically. If it doesn't, paste the code shown in the browser.
       </div>
       <input className="field mono" style={{ width: 160 }} placeholder="Paste code" aria-label="Completion code" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && code.trim() && submit()} />
-      <button className="btn sm" disabled={!code.trim()} onClick={submit}>
+      <Button className="btn sm" disabled={!code.trim()} onClick={submit}>
         Finish
-      </button>
-      <button className="icon-btn" aria-label="Cancel" onClick={onClose}>
+      </Button>
+      <Button className="icon-btn" aria-label="Cancel" onClick={onClose}>
         <X size={13} />
-      </button>
+      </Button>
     </div>
   )
 }
@@ -70,9 +70,9 @@ export function ConnectionsView() {
           <p>Choose which inputs become actionables.</p>
         </div>
         <div className="actions">
-          <button className="btn" onClick={() => app.go('activity')}>
+          <Button className="btn" onClick={() => app.go('activity')}>
             <Activity size={13} /> Connection activity
-          </button>
+          </Button>
         </div>
       </div>
       <div className="page-body">
@@ -113,25 +113,25 @@ function ConnHead({ icon, name, info, sub, children }: { icon: ReactNode; name: 
         </span>
         <span className="spacer" />
         {info.status === 'connected' && (
-          <button className="btn sm" onClick={() => app.run(api.connections.manageAccess(provider))}>
+          <Button className="btn sm" onClick={() => app.run(api.connections.manageAccess(provider))}>
             Manage access
-          </button>
+          </Button>
         )}
         {info.status !== 'disconnected' && (
-          <button
+          <Button
             className="btn sm"
             onClick={async () => {
               if (await app.confirm(`Disconnect ${name}?`, 'Gantry revokes the grant. Existing cards are kept and tagged “Source disconnected”.', 'Disconnect')) await app.run(api.connections.disconnect(provider))
             }}
           >
             Disconnect
-          </button>
+          </Button>
         )}
         {info.status !== 'connected' && (
-          <button className={`btn ${info.status === 'disconnected' ? 'primary' : ''}`} onClick={() => auth.start(api.connections.connect(provider))}>
+          <Button className={`btn ${info.status === 'disconnected' ? 'primary' : ''}`} onClick={() => auth.start(api.connections.connect(provider))}>
             {info.status === 'reconnect_required' ? <RefreshCw size={13} /> : <ArrowUpRight size={13} />}
             {info.status === 'reconnect_required' ? 'Reconnect' : 'Connect'}
-          </button>
+          </Button>
         )}
       </div>
       {auth.banner}
@@ -256,9 +256,9 @@ function ApiCard() {
         <span className="mono grow truncate selectable" title={endpoint}>
           {path || '/v1/actionables'}
         </span>
-        <button className="icon-btn" aria-label="Copy endpoint" onClick={() => copy(endpoint)}>
+        <Button className="icon-btn" aria-label="Copy endpoint" onClick={() => copy(endpoint)}>
           <Copy size={13} />
-        </button>
+        </Button>
       </div>
       <div className="col" style={{ gap: 6 }}>
         <span className="small muted">Tokens</span>
@@ -271,7 +271,7 @@ function ApiCard() {
             <span className="mono" style={{ marginLeft: 'auto' }}>
               {t.prefix}••••••••{t.lastFour}
             </span>
-            <button
+            <Button
               className="btn sm danger"
               onClick={async () => {
                 if (await app.confirm(`Revoke “${t.name}”?`, 'Requests using this token will be rejected immediately.', 'Revoke token')) {
@@ -281,15 +281,15 @@ function ApiCard() {
               }}
             >
               Revoke
-            </button>
+            </Button>
           </div>
         ))}
       </div>
       <div className="row wrap">
-        <button className="btn" onClick={create}>
+        <Button className="btn" onClick={create}>
           <KeyRound size={13} /> Create API token
-        </button>
-        <button
+        </Button>
+        <Button
           className="btn"
           onClick={async () => {
             await app.run(api.connections.sendTestActionable())
@@ -297,10 +297,10 @@ function ApiCard() {
           }}
         >
           <Send size={13} /> Send test actionable
-        </button>
-        <button className="btn" onClick={() => setDocs(!docs)}>
+        </Button>
+        <Button className="btn" onClick={() => setDocs(!docs)}>
           <ExternalLink size={13} /> API docs
-        </button>
+        </Button>
       </div>
       {docs && (
         <pre className="box mono selectable" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
@@ -332,12 +332,12 @@ POST /v1/reports (long-form markdown, not a card)
           onClose={() => setCreated(undefined)}
           footer={
             <>
-              <button className="btn" onClick={() => copy(created.token)}>
+              <Button className="btn" onClick={() => copy(created.token)}>
                 <Copy size={13} /> Copy token
-              </button>
-              <button className="btn primary" onClick={() => setCreated(undefined)}>
+              </Button>
+              <Button className="btn primary" onClick={() => setCreated(undefined)}>
                 Done
-              </button>
+              </Button>
             </>
           }
         >

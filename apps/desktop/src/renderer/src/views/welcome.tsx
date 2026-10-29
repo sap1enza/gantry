@@ -2,7 +2,7 @@ import { PROVIDER_SOURCE, TRIGGERS, type OAuthProvider } from '@gantry/shared'
 import { ArrowUpRight, Check, CircleCheck, CircleDashed, CircleDot, CircleHelp, Inbox, Lock, Pause, Plus, ShieldCheck, SlidersHorizontal, SquareTerminal, Webhook, X } from 'lucide-react'
 import { useApp } from '../app'
 import { api } from '../bridge'
-import { Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
+import { Button, Github, OAUTH_INPUTS, SOURCE_LABELS, SourceIcon } from '../ui'
 import { useBrowserAuth } from './connections'
 
 const HINTS = { github: 'Pull requests, issues, and alerts' } as const
@@ -39,9 +39,9 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
           {done} of 3 steps complete
         </span>
         {embedded && (
-          <button className="icon-btn" aria-label="Close setup" onClick={() => app.setShowWelcome(false)}>
+          <Button className="icon-btn" aria-label="Close setup" onClick={() => app.setShowWelcome(false)}>
             <X size={14} />
-          </button>
+          </Button>
         )}
       </div>
       <div className="welcome-steps">
@@ -60,9 +60,9 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
               {statusOf(provider) === 'connected' ? (
                 <span className="tag green">Connected</span>
               ) : (
-                <button className={`btn sm ${i === 0 && !steps[0] ? 'primary' : ''}`} onClick={() => connect(provider)}>
+                <Button className={`btn sm ${i === 0 && !steps[0] ? 'primary' : ''}`} onClick={() => connect(provider)}>
                   <ArrowUpRight size={12} /> {statusOf(provider) === 'reconnect_required' ? 'Reconnect' : 'Connect'}
-                </button>
+                </Button>
               )}
             </div>
           ))}
@@ -119,9 +119,9 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
             </li>
           </ul>
           <div className="row">
-            <button className="btn sm" onClick={() => app.go('preferences')}>
+            <Button className="btn sm" onClick={() => app.go('preferences')}>
               <SlidersHorizontal size={12} /> Agent preferences
-            </button>
+            </Button>
             <span className="tag">{canDispatch ? 'Waiting for an actionable' : 'Needs Claude Code and a repository'}</span>
           </div>
         </div>
@@ -139,9 +139,9 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
           <p>A quiet place to triage work and dispatch agents.</p>
         </div>
         <div className="actions">
-          <button className="btn" onClick={() => app.go('preferences')}>
+          <Button className="btn" onClick={() => app.go('preferences')}>
             <CircleHelp size={13} /> Help
-          </button>
+          </Button>
         </div>
       </div>
       <div className="page-body">
@@ -165,12 +165,12 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
             <h3>No actionables yet</h3>
             <span className="muted">Your connected inputs will appear here. Nothing runs until you start it.</span>
             <div className="row">
-              <button className="btn primary" onClick={() => connect('github')}>
+              <Button className="btn primary" onClick={() => connect('github')}>
                 <Github size={13} /> Connect GitHub
-              </button>
-              <button className="btn" onClick={() => app.setNewOpen(true)}>
+              </Button>
+              <Button className="btn" onClick={() => app.setNewOpen(true)}>
                 <Plus size={13} /> Create manually
-              </button>
+              </Button>
             </div>
             <span className="tiny faint">No sample data has been added to your workspace.</span>
           </div>
@@ -181,9 +181,9 @@ export function Welcome({ embedded }: { embedded?: boolean }) {
             <b>Work can come from anywhere.</b>
             Use the API to create actionables from Honeybadger, your automations, or another agent.
           </div>
-          <button className="btn sm" onClick={() => app.go('connections')}>
+          <Button className="btn sm" onClick={() => app.go('connections')}>
             <ArrowUpRight size={12} /> Set up API access
-          </button>
+          </Button>
         </div>
       </div>
     </>

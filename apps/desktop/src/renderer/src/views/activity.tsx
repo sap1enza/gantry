@@ -3,7 +3,7 @@ import { Calendar, ChevronDown, Download, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { clockSeconds, Popover, SOURCE_LABELS, SourceIcon, Tag, toggle, usePopover } from '../ui'
+import { Button, clockSeconds, Popover, SOURCE_LABELS, SourceIcon, Tag, toggle, usePopover } from '../ui'
 
 const TYPE_LABEL: Record<EventType, string> = {
   received: 'Received',
@@ -162,31 +162,31 @@ export function ActivityView() {
           <p>Incoming events and every change to your work.</p>
         </div>
         <div className="actions">
-          <button className="btn" onClick={(e) => exportPop.toggle(e.currentTarget)}>
+          <Button className="btn" onClick={(e) => exportPop.toggle(e.currentTarget)}>
             <Download size={13} /> Export log
-          </button>
+          </Button>
           {exportPop.anchor && (
             <Popover anchor={exportPop.anchor} onClose={exportPop.close} align="right">
-              <button className="menu-item" onClick={() => exportLog('json')}>
+              <Button className="menu-item" onClick={() => exportLog('json')}>
                 Export JSON
-              </button>
-              <button className="menu-item" onClick={() => exportLog('csv')}>
+              </Button>
+              <Button className="menu-item" onClick={() => exportLog('csv')}>
                 Export CSV
-              </button>
+              </Button>
             </Popover>
           )}
         </div>
       </div>
       <div className="page-body">
         <div className="filters">
-          <button className="btn" onClick={(e) => typePop.toggle(e.currentTarget)}>
+          <Button className="btn" onClick={(e) => typePop.toggle(e.currentTarget)}>
             <ChevronDown size={12} /> {types.length ? `${types.length} event type${types.length > 1 ? 's' : ''}` : 'All event types'}
-          </button>
+          </Button>
           {typePop.anchor && (
             <Popover anchor={typePop.anchor} onClose={typePop.close}>
-              <button className="menu-item" onClick={() => setTypes([])}>
+              <Button className="menu-item" onClick={() => setTypes([])}>
                 All event types
-              </button>
+              </Button>
               <div style={{ maxHeight: 320, overflow: 'auto' }}>
                 {EVENT_TYPES.map((t) => (
                   <label key={t} className="menu-item check">
@@ -196,14 +196,14 @@ export function ActivityView() {
               </div>
             </Popover>
           )}
-          <button className="btn" onClick={(e) => srcPop.toggle(e.currentTarget)}>
+          <Button className="btn" onClick={(e) => srcPop.toggle(e.currentTarget)}>
             <ChevronDown size={12} /> {sources.length ? sources.join(', ') : 'All sources'}
-          </button>
+          </Button>
           {srcPop.anchor && (
             <Popover anchor={srcPop.anchor} onClose={srcPop.close}>
-              <button className="menu-item" onClick={() => setSources([])}>
+              <Button className="menu-item" onClick={() => setSources([])}>
                 All sources
-              </button>
+              </Button>
               {sourceOptions.map((s) => (
                 <label key={s} className="menu-item check">
                   <input type="checkbox" checked={sources.includes(s)} onChange={() => setSources(toggle(sources, s))} />
@@ -212,15 +212,15 @@ export function ActivityView() {
               ))}
             </Popover>
           )}
-          <button className="btn" onClick={(e) => datePop.toggle(e.currentTarget)}>
+          <Button className="btn" onClick={(e) => datePop.toggle(e.currentTarget)}>
             <Calendar size={13} /> {RANGES.find((r) => r.id === range)!.label}
-          </button>
+          </Button>
           {datePop.anchor && (
             <Popover anchor={datePop.anchor} onClose={datePop.close}>
               {RANGES.map((r) => (
-                <button key={r.id} className={`menu-item ${r.id === range ? 'active' : ''}`} onClick={() => (setRange(r.id), datePop.close())}>
+                <Button key={r.id} className={`menu-item ${r.id === range ? 'active' : ''}`} onClick={() => (setRange(r.id), datePop.close())}>
                   {r.label}
-                </button>
+                </Button>
               ))}
             </Popover>
           )}
@@ -231,18 +231,18 @@ export function ActivityView() {
           {app.activityCard && (
             <span className="tag blue" style={{ height: 24 }}>
               Card {cardLabel ?? '…'}
-              <button className="icon-btn" style={{ width: 16, height: 16 }} aria-label="Clear card filter" onClick={() => app.setActivityCard(undefined)}>
+              <Button className="icon-btn" style={{ width: 16, height: 16 }} aria-label="Clear card filter" onClick={() => app.setActivityCard(undefined)}>
                 <X size={11} />
-              </button>
+              </Button>
             </span>
           )}
           <span className="live">Live updates</span>
         </div>
         <div className="chips">
           {CHIPS.map((c) => (
-            <button key={c.label} className={`chip ${chip === c ? 'active' : ''}`} onClick={() => setTypes(c.types ?? [])}>
+            <Button key={c.label} className={`chip ${chip === c ? 'active' : ''}`} onClick={() => setTypes(c.types ?? [])}>
               {c.label}
-            </button>
+            </Button>
           ))}
           <span className="small muted" style={{ marginLeft: 'auto' }}>
             {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -288,9 +288,9 @@ export function ActivityView() {
             Showing {events.length} {range === 'today' ? `of ${totalToday} events today` : 'events'} · All times local
           </span>
           {more && (
-            <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setPage({ filters, limit: limit + PAGE })}>
+            <Button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setPage({ filters, limit: limit + PAGE })}>
               <ChevronDown size={12} /> Load earlier events
-            </button>
+            </Button>
           )}
         </div>
       </div>

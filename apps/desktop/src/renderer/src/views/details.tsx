@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'reac
 import { useApp, usePush } from '../app'
 import { CardEvent } from './activity'
 import { api } from '../bridge'
-import { ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL, when } from '../ui'
+import { Button, ActionButton, AGENT_STATE_LABEL, clock, clockSeconds, Markdown, PRESET_LABEL, Select, SourceIcon, Tag, PriorityTag, PROVIDER_LABEL, when } from '../ui'
 
 export function stateLabel(a: Actionable, columns: Column[] = []) {
   if (a.dismissedAt) return 'Dismissed'
@@ -100,9 +100,9 @@ export function DetailsPanel({ id }: { id: string }) {
             <span className="eyebrow">
               {side === 'log' ? 'Activity log' : 'Transcript'} · {card.displayId}
             </span>
-            <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close" onClick={() => setSide(undefined)}>
+            <Button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Close" onClick={() => setSide(undefined)}>
               <X size={14} />
-            </button>
+            </Button>
           </div>
           {side === 'transcript' ? (
             <div className="transcript">
@@ -126,12 +126,12 @@ export function DetailsPanel({ id }: { id: string }) {
       <aside className="panel" aria-label="Actionable details">
         <div className="row">
           <span className="eyebrow">Actionable · {card.displayId}</span>
-          <button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Edit card" onClick={() => setEditing(!editing)}>
+          <Button className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Edit card" onClick={() => setEditing(!editing)}>
             <Pencil size={13} />
-          </button>
-          <button className="icon-btn" aria-label="Close panel" onClick={app.closePanel}>
+          </Button>
+          <Button className="icon-btn" aria-label="Close panel" onClick={app.closePanel}>
             <PanelRightClose size={14} />
-          </button>
+          </Button>
         </div>
         <div className="row">
           <Tag tone={card.agentState === 'running' ? 'green' : undefined}>{stateLabel(card, app.snapshot?.columns)}</Tag>
@@ -182,17 +182,17 @@ export function DetailsPanel({ id }: { id: string }) {
             {q.options && (
               <div className="row wrap" style={{ gap: 6 }}>
                 {q.options.map((o) => (
-                  <button key={o} className="btn sm" onClick={() => sendAnswer(o)}>
+                  <Button key={o} className="btn sm" onClick={() => sendAnswer(o)}>
                     {o}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
             <textarea className="field" rows={2} placeholder="Type an answer…" value={answer} onChange={(e) => setAnswer(e.target.value)} />
             <div className="row">
-              <button className="btn sm primary" style={{ marginLeft: 'auto' }} disabled={!answer.trim()} onClick={() => sendAnswer(answer)}>
+              <Button className="btn sm primary" style={{ marginLeft: 'auto' }} disabled={!answer.trim()} onClick={() => sendAnswer(answer)}>
                 Send answer
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -202,10 +202,10 @@ export function DetailsPanel({ id }: { id: string }) {
             <h3>Reopen with feedback</h3>
             <textarea className="field" rows={3} autoFocus placeholder="What should the agent change?" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
             <div className="row">
-              <button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
+              <Button className="btn sm" onClick={() => app.setReopenFor(undefined)}>
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 className="btn sm primary"
                 onClick={async () => {
                   await app.run(api.board.reopen(card.id, feedback.trim() || undefined))
@@ -213,7 +213,7 @@ export function DetailsPanel({ id }: { id: string }) {
                 }}
               >
                 Reopen and resume
-              </button>
+              </Button>
             </div>
           </section>
         )}
@@ -296,9 +296,9 @@ export function DetailsPanel({ id }: { id: string }) {
             ))}
             {!events.length && <li className="muted">No activity yet</li>}
           </ul>
-          <button className={`btn sm ${side === 'log' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => (side === 'log' ? setSide(undefined) : void openLog())}>
+          <Button className={`btn sm ${side === 'log' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => (side === 'log' ? setSide(undefined) : openLog())}>
             <List size={12} /> View log
-          </button>
+          </Button>
         </details>
 
         {d && (
@@ -316,9 +316,9 @@ export function DetailsPanel({ id }: { id: string }) {
               ))}
               {!messages.length && <li className="muted">No agent messages yet</li>}
             </ul>
-            <button className={`btn sm ${side === 'transcript' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => setSide(side === 'transcript' ? undefined : 'transcript')}>
+            <Button className={`btn sm ${side === 'transcript' ? 'active' : ''}`} style={{ alignSelf: 'flex-start' }} onClick={() => setSide(side === 'transcript' ? undefined : 'transcript')}>
               <FileText size={12} /> Open transcript
-            </button>
+            </Button>
           </details>
         )}
       </aside>
@@ -345,9 +345,9 @@ function TagEditor({ card }: { card: Actionable }) {
         <Tag key={t}>
           {t}
           {!SYSTEM_TAGS.includes(t) && (
-            <button className="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => save(card.tags.filter((x) => x !== t))}>
+            <Button className="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => save(card.tags.filter((x) => x !== t))}>
               <X size={10} />
-            </button>
+            </Button>
           )}
         </Tag>
       ))}
@@ -370,9 +370,9 @@ function TagEditor({ card }: { card: Actionable }) {
           </datalist>
         </>
       ) : (
-        <button className="btn sm ghost" onClick={() => setAdding(true)}>
+        <Button className="btn sm ghost" onClick={() => setAdding(true)}>
           <Plus size={11} /> Tag
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -393,12 +393,12 @@ function CardEditor({ card, onClose }: { card: Actionable; onClose: () => void }
       <textarea className="field" aria-label="Description" rows={6} placeholder="Description (Markdown)" value={body} onChange={(e) => setBody(e.target.value)} />
       <div className="row">
         <Select label="Priority" value={priority} options={PRIORITIES.map((p) => ({ value: p, label: p[0]!.toUpperCase() + p.slice(1) }))} onChange={setPriority} />
-        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
+        <Button className="btn sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
           Cancel
-        </button>
-        <button className="btn sm primary" disabled={!title.trim()} onClick={save}>
+        </Button>
+        <Button className="btn sm primary" disabled={!title.trim()} onClick={save}>
           Save
-        </button>
+        </Button>
       </div>
     </div>
   )

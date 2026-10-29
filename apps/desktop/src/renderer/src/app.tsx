@@ -17,7 +17,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, bridge } from './bridge'
 import { shortcutFor } from './lib/shortcuts'
 import { reuseSnapshot } from './lib/snapshot'
-import { Modal } from './ui'
+import { Button, Modal } from './ui'
 
 const VIEWS = ['triage', 'reports', 'activity', 'connections', 'preferences'] as const
 export type View = (typeof VIEWS)[number]
@@ -407,14 +407,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           title={dialog.title}
           onClose={() => (dialog.resolve(undefined), setDialog(undefined))}
           footer={dialog.actions.map((a) => (
-            <button
+            <Button
               key={a.label}
               className={`btn ${a.tone === 'primary' ? 'primary' : a.tone === 'danger' ? 'danger solid' : ''}`}
               autoFocus={!dialog.input && a.tone !== undefined}
               onClick={() => (dialog.resolve(a.value || undefined), setDialog(undefined))}
             >
               {a.label}
-            </button>
+            </Button>
           ))}
         >
           {dialog.body && <div className="muted" style={{ fontSize: 12 }}>{dialog.body}</div>}

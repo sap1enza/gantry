@@ -3,7 +3,7 @@ import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, 
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { columnCards, useApp, type AppState, type Sort } from '../app'
 import { api } from '../bridge'
-import { ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover, when } from '../ui'
+import { Button, ACTION_META, ActionButton, AGENT_STATE_LABEL, ago, clock, elapsed, Popover, PriorityTag, PROVIDER_LABEL, Select, SOURCE_LABELS, SourceIcon, sourceLabel, Tag, toggle, useNow, usePopover, when } from '../ui'
 import { DetailsPanel } from './details'
 import { Welcome } from './welcome'
 
@@ -71,18 +71,18 @@ export function TriageView() {
           </p>
         </div>
         <div className="actions">
-          <button className="btn ghost" aria-label="Help" onClick={() => app.setShowWelcome(!app.showWelcome)}>
+          <Button className="btn ghost" aria-label="Help" onClick={() => app.setShowWelcome(!app.showWelcome)}>
             <CircleHelp size={14} />
-          </button>
-          <button className="btn" onClick={(e) => fieldsPop.toggle(e.currentTarget)}>
+          </Button>
+          <Button className="btn" onClick={(e) => fieldsPop.toggle(e.currentTarget)}>
             <SlidersHorizontal size={13} /> Card fields
-          </button>
-          <button className="btn" onClick={addColumn}>
+          </Button>
+          <Button className="btn" onClick={addColumn}>
             <Plus size={13} /> Add column
-          </button>
-          <button className="btn primary" onClick={() => app.setNewOpen(true)}>
+          </Button>
+          <Button className="btn primary" onClick={() => app.setNewOpen(true)}>
             <Plus size={13} /> New actionable
-          </button>
+          </Button>
         </div>
         {fieldsPop.anchor && (
           <Popover anchor={fieldsPop.anchor} onClose={fieldsPop.close} align="right">
@@ -223,19 +223,19 @@ function Toolbar() {
 
   return (
     <div className="toolbar">
-      <button className={`btn sm ${f.today ? 'active' : ''}`} aria-pressed={!!f.today} onClick={() => app.setFilter({ ...f, today: f.today ? undefined : true })}>
+      <Button className={`btn sm ${f.today ? 'active' : ''}`} aria-pressed={!!f.today} onClick={() => app.setFilter({ ...f, today: f.today ? undefined : true })}>
         Today
-      </button>
-      <button className="btn sm" onClick={(e) => srcPop.toggle(e.currentTarget)}>
+      </Button>
+      <Button className="btn sm" onClick={(e) => srcPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
         {sources.length === 0 ? 'All sources' : sources.length === 1 ? SOURCE_LABELS[sources[0] as keyof typeof SOURCE_LABELS] : `${sources.length} sources`}
         {f.showDismissed && <Tag tone="blue">+dismissed</Tag>}
-      </button>
+      </Button>
       {srcPop.anchor && (
         <Popover anchor={srcPop.anchor} onClose={srcPop.close}>
-          <button className={`menu-item ${sources.length === 0 ? 'active' : ''}`} onClick={() => setSources([])}>
+          <Button className={`menu-item ${sources.length === 0 ? 'active' : ''}`} onClick={() => setSources([])}>
             All sources
-          </button>
+          </Button>
           {SOURCE_KINDS.map((k) => (
             <label key={k} className="menu-item check">
               <input type="checkbox" checked={sources.includes(k)} onChange={() => setSources(toggle(sources, k))} />
@@ -248,31 +248,31 @@ function Toolbar() {
           </label>
         </Popover>
       )}
-      <button className="btn sm" onClick={(e) => agentPop.toggle(e.currentTarget)}>
+      <Button className="btn sm" onClick={(e) => agentPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
         {f.providers?.length ? f.providers.map((p) => PROVIDER_LABEL[p] ?? p).join(', ') : 'All agents'}
-      </button>
+      </Button>
       {agentPop.anchor && (
         <Popover anchor={agentPop.anchor} onClose={agentPop.close}>
-          <button className={`menu-item ${!f.providers ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: undefined }), agentPop.close())}>
+          <Button className={`menu-item ${!f.providers ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: undefined }), agentPop.close())}>
             All agents
-          </button>
+          </Button>
           {Object.entries(PROVIDER_LABEL).map(([id, label]) => (
-            <button key={id} className={`menu-item ${f.providers?.includes(id) ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: [id] }), agentPop.close())}>
+            <Button key={id} className={`menu-item ${f.providers?.includes(id) ? 'active' : ''}`} onClick={() => (app.setFilter({ ...f, providers: [id] }), agentPop.close())}>
               <SquareTerminal size={13} /> {label}
-            </button>
+            </Button>
           ))}
         </Popover>
       )}
-      <button className="btn sm" onClick={(e) => tagPop.toggle(e.currentTarget)}>
+      <Button className="btn sm" onClick={(e) => tagPop.toggle(e.currentTarget)}>
         <ChevronDown size={12} />
         {tags.length === 0 ? 'All tags' : tags.length === 1 ? tags[0] : `${tags.length} tags`}
-      </button>
+      </Button>
       {tagPop.anchor && (
         <Popover anchor={tagPop.anchor} onClose={tagPop.close}>
-          <button className={`menu-item ${tags.length === 0 ? 'active' : ''}`} onClick={() => setTags([])}>
+          <Button className={`menu-item ${tags.length === 0 ? 'active' : ''}`} onClick={() => setTags([])}>
             All tags
-          </button>
+          </Button>
           {[...seenTags.current].sort().map((t) => (
             <label key={t} className="menu-item check">
               <input type="checkbox" checked={tags.includes(t)} onChange={() => setTags(toggle(tags, t))} /> {t}
@@ -283,7 +283,7 @@ function Toolbar() {
       )}
       <Select style={{ height: 25, fontSize: 11 }} label="Sort" value={app.sort} options={SORTS} onChange={app.setSort} />
       <span className="small muted">Updated {ago(refreshedAt)}</span>
-      <button
+      <Button
         className="icon-btn"
         style={{ marginLeft: 'auto' }}
         aria-label="Sync now"
@@ -293,7 +293,7 @@ function Toolbar() {
         }}
       >
         <RefreshCw size={13} />
-      </button>
+      </Button>
     </div>
   )
 }
@@ -320,26 +320,26 @@ function ColumnHead({ column, count, icon: Icon, onDragStart, onDragEnd }: { col
       <span className="n">{count}</span>
       <span className="end">
         {custom ? (
-          <button className="icon-btn" aria-label={`${column.name} column menu`} onClick={(e) => menu.toggle(e.currentTarget)}>
+          <Button className="icon-btn" aria-label={`${column.name} column menu`} onClick={(e) => menu.toggle(e.currentTarget)}>
             <MoreHorizontal size={14} />
-          </button>
+          </Button>
         ) : (
           <Lock size={12} aria-label="Fixed column" />
         )}
       </span>
       {menu.anchor && (
         <Popover anchor={menu.anchor} onClose={menu.close} align="right">
-          <button className="menu-item" onClick={() => (menu.close(), setEditing(true))}>
+          <Button className="menu-item" onClick={() => (menu.close(), setEditing(true))}>
             Rename
-          </button>
-          <button className="menu-item" disabled={index === 0} onClick={() => (menu.close(), app.run(api.columns.move(column.id, index - 1)))}>
+          </Button>
+          <Button className="menu-item" disabled={index === 0} onClick={() => (menu.close(), app.run(api.columns.move(column.id, index - 1)))}>
             Move left
-          </button>
-          <button className="menu-item" disabled={index === cols.length - 1} onClick={() => (menu.close(), app.run(api.columns.move(column.id, index + 1)))}>
+          </Button>
+          <Button className="menu-item" disabled={index === cols.length - 1} onClick={() => (menu.close(), app.run(api.columns.move(column.id, index + 1)))}>
             Move right
-          </button>
+          </Button>
           <div className="menu-sep" />
-          <button
+          <Button
             className="menu-item"
             style={{ color: 'var(--red)' }}
             onClick={async () => {
@@ -348,7 +348,7 @@ function ColumnHead({ column, count, icon: Icon, onDragStart, onDragEnd }: { col
             }}
           >
             Delete column
-          </button>
+          </Button>
         </Popover>
       )}
     </div>
@@ -410,9 +410,9 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
           </>
         )}
         {fields.receivedTime && <span>{fields.source ? '· ' : ''}{when(card.createdAt)}</span>}
-        <button className="icon-btn" style={{ marginLeft: 'auto', height: 18 }} aria-label="Card menu" onClick={(e) => (e.stopPropagation(), menu.toggle(e.currentTarget))}>
+        <Button className="icon-btn" style={{ marginLeft: 'auto', height: 18 }} aria-label="Card menu" onClick={(e) => (e.stopPropagation(), menu.toggle(e.currentTarget))}>
           <MoreHorizontal size={14} />
-        </button>
+        </Button>
       </div>
       <div className="card-title">{card.title}</div>
       {!card.links.length && card.body && <div className="small muted">{card.body.replace(/[*_`>#]/g, '').slice(0, 140)}</div>}
@@ -453,28 +453,28 @@ const Card = memo(function Card({ card, fields, columns, selected, dropBefore, o
       )}
       {menu.anchor && (
         <Popover anchor={menu.anchor} onClose={menu.close} align="right">
-          <button className="menu-item" onClick={() => (menu.close(), on.open(card.id))}>
+          <Button className="menu-item" onClick={() => (menu.close(), on.open(card.id))}>
             Open details
-          </button>
+          </Button>
           {card.column === 'done' &&
             actionsFor(card).map((a) => {
               const { label, icon: Icon } = ACTION_META[a]
               return (
-                <button key={a} className="menu-item" onClick={() => (menu.close(), on.act(a, card))}>
+                <Button key={a} className="menu-item" onClick={() => (menu.close(), on.act(a, card))}>
                   <Icon size={12} /> {label}
-                </button>
+                </Button>
               )
             })}
           {moveTargets.length > 0 && <div className="menu-label">Move to</div>}
           {moveTargets.map((c) => (
-            <button key={c.id} className="menu-item" onClick={() => (menu.close(), void on.move(card, c.id, 0))}>
+            <Button key={c.id} className="menu-item" onClick={() => (menu.close(), void on.move(card, c.id, 0))}>
               {c.name}
-            </button>
+            </Button>
           ))}
           <div className="menu-sep" />
-          <button className="menu-item danger" onClick={() => (menu.close(), void on.remove(card))}>
+          <Button className="menu-item danger" onClick={() => (menu.close(), void on.remove(card))}>
             <Trash2 size={12} /> Delete
-          </button>
+          </Button>
         </Popover>
       )}
     </article>

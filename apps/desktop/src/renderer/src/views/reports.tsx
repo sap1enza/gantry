@@ -3,7 +3,7 @@ import { Archive, ExternalLink } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useApp, usePush } from '../app'
 import { api } from '../bridge'
-import { Markdown, Tag, when } from '../ui'
+import { Button, Markdown, Tag, when } from '../ui'
 
 export function ReportsView() {
   const { run } = useApp()
@@ -39,12 +39,12 @@ export function ReportsView() {
         <div className="report-list">
           {reports.length === 0 && <span className="small muted" style={{ padding: 16 }}>No reports yet</span>}
           {reports.map((r) => (
-            <button key={r.id} className={`report-row ${r.id === selectedId ? 'active' : ''} ${r.readAt ? '' : 'unread'}`} onClick={() => select(r)}>
+            <Button key={r.id} className={`report-row ${r.id === selectedId ? 'active' : ''} ${r.readAt ? '' : 'unread'}`} onClick={() => select(r)}>
               <span className="truncate report-title">{r.title}</span>
               <span className="small muted">
                 {r.source.name} · {when(r.updatedAt)}
               </span>
-            </button>
+            </Button>
           ))}
         </div>
         <div className="report-detail">
@@ -53,9 +53,9 @@ export function ReportsView() {
               <div className="row">
                 <h2 className="selectable grow">{selected.title}</h2>
                 {!selected.archivedAt && (
-                  <button className="btn sm" onClick={() => void run(api.reports.archive(selected.id))}>
+                  <Button className="btn sm" onClick={() => run(api.reports.archive(selected.id))}>
                     <Archive size={12} /> Archive
-                  </button>
+                  </Button>
                 )}
               </div>
               <div className="row small muted">
